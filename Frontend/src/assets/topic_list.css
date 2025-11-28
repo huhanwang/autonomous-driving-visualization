@@ -1,0 +1,269 @@
+.topic-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Header */
+.list-header {
+  padding: 16px;
+  border-bottom: 1px solid #ebeef5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.list-header .title {
+  font-weight: 600;
+  font-size: 16px;
+  color: #303133;
+}
+
+/* Search & Filter Controls */
+.list-controls {
+  padding: 12px 16px;
+  border-bottom: 1px solid #ebeef5;
+  display: flex;
+  gap: 8px;
+}
+
+.search-input {
+  flex: 1;
+}
+
+.pack-filter {
+  width: 180px;
+}
+
+/* Content */
+.list-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.topic-groups {
+  padding: 8px;
+}
+
+/* Topic Group */
+.topic-group {
+  margin-bottom: 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+
+/* Group Header */
+.group-header {
+  padding: 12px 16px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #ebeef5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.group-header:hover {
+  background: #ecf5ff;
+}
+
+.group-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.collapse-icon {
+  transition: transform 0.3s;
+  color: #909399;
+}
+
+.collapse-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.group-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+  font-family: 'Courier New', monospace;
+}
+
+.group-count {
+  margin-left: 4px;
+}
+
+.has-data-tag {
+  margin-left: 4px;
+}
+
+/* Group Content */
+.group-content {
+  padding: 8px;
+}
+
+/* Topic Item */
+.topic-item {
+  display: flex;
+  align-items: flex-start;
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+  border: 2px solid transparent;
+  background: #fafafa;
+}
+
+.topic-item:hover {
+  background: #f5f7fa;
+  transform: translateX(2px);
+}
+
+.topic-item.active {
+  background: #ecf5ff;
+  border-color: #409eff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.2);
+}
+
+.topic-item.has-data {
+  background: #f0f9ff;
+}
+
+/* æ›´æ–°æŒ‡ç¤ºç¯ */
+.update-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  color: #67c23a;
+  animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Content */
+.topic-content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Header */
+.topic-header {
+  margin-bottom: 8px;
+}
+
+.topic-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dcdfe6;
+  transition: all 0.3s;
+}
+
+.status-dot.active {
+  background: #67c23a;
+  box-shadow: 0 0 8px rgba(103, 194, 58, 0.5);
+}
+
+.name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-tag {
+  margin-left: 4px;
+}
+
+.topic-path {
+  font-size: 11px;
+  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Courier New', monospace;
+}
+
+/* Status */
+.topic-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-icon {
+  color: #409eff;
+  font-size: 12px;
+}
+
+.status-text {
+  font-size: 12px;
+  color: #606266;
+  font-family: 'Courier New', monospace;
+}
+
+.update-time .status-text {
+  color: #909399;
+  font-style: italic;
+}
+
+.topic-no-data {
+  padding: 4px 0;
+}
+
+/* Arrow */
+.topic-arrow {
+  margin-left: 12px;
+  color: #409eff;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+}
+
+/* Footer */
+.list-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #ebeef5;
+  display: flex;
+  gap: 8px;
+}
+
+.list-footer .el-button {
+  flex: 1;
+}
