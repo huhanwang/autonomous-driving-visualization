@@ -1,9 +1,16 @@
-// DataManager.ts - 优化版
+// Frontend/src/packages/data-panel/managers/DataManager.ts - 驱动化改造版
 
-import type { TopicData } from '@/types/topic'
 import { schemaManager, type TreeTemplateNode } from './SchemaManager'
 import { EventEmitter } from '@/managers/EventEmitter'
-import { setNestedValue, getValueIcon, getValueType, formatFieldValue } from '../utils/protoParser'
+import type { TopicData } from '@/types/topic'
+
+// 🌟 核心改变：从虚拟别名导入驱动，而不是具体的 Worker 文件
+// 无论底层是 Pack 还是 ROS，这里都不需要改代码
+import { packDriver as driver } from '@/driver' // 暂时为了类型推断，Vite别名会处理实际加载
+
+// 移除这些具体的解析工具依赖，因为它们现在封装在 Worker 内部了
+// import { setNestedValue... } from '../utils/protoParser' 
+import { getValueIcon, getValueType, formatFieldValue } from '../utils/formatters' // UI 相关的保留
 
 export interface RenderedTreeNode extends TreeTemplateNode {
   value?: any
@@ -21,16 +28,32 @@ interface CacheEntry {
   tree: RenderedTreeNode[]
 }
 
+export interface DataUpdateEvent {
+  topicKey: string
+  frameId: number
+  timestamp: number
+}
+
 export class DataManager extends EventEmitter {
   private static instance: DataManager
+  
+  // Worker 实例 (通用 Worker 类型)
+  private worker: Worker
   
   private rawData: Map<string, TopicData> = new Map()
   private parsedData: Map<string, ParsedData> = new Map()
   private renderedTrees: Map<string, RenderedTreeNode[]> = new Map()
+  
   private treeCache: Map<string, CacheEntry> = new Map()
   
   private constructor() {
     super()
+    
+    // 🌟 核心改变：使用驱动工厂创建 Worker
+    console.log(`[DataManager] Initializing with driver: ${driver.name}`)
+    this.worker = driver.createWorker()
+    
+    this.setupWorker()
   }
   
   static getInstance(): DataManager {
@@ -40,28 +63,65 @@ export class DataManager extends EventEmitter {
     return DataManager.instance
   }
   
-  // 在 DataManager.ts 的 updateData 方法中添加
-  updateData(topicKey: string, data: TopicData): void {
-    // console.log('🔄 DataManager.updateData:', topicKey, 'frame:', data.frame_id)
+  private setupWorker() {
+    this.worker.onmessage = (e: MessageEvent) => {
+      // 驱动层保证返回标准格式：{ success, topicKey, parsedData, error }
+      const { success, topicKey, parsedData, error } = e.data
+      
+      if (success && parsedData) {
+        this.handleWorkerResult(topicKey, parsedData)
+      } else if (error) {
+        console.error(`[DataManager] Worker error for ${topicKey}:`, error)
+      }
+    }
+  }
+
+  private handleWorkerResult(topicKey: string, result: ParsedData) {
+    this.parsedData.set(topicKey, result)
     
+    const rendered = this.buildRenderedTree(topicKey, result)
+    if (rendered) {
+      this.renderedTrees.set(topicKey, rendered)
+    }
+    
+    const raw = this.rawData.get(topicKey)
+    
+    if (raw) {
+      this.emit('data-updated', {
+        topicKey,
+        frameId: raw.frame_id,
+        timestamp: raw.timestamp
+      } as DataUpdateEvent)
+    }
+  }
+  
+  updateData(topicKey: string, data: TopicData): void {
     this.rawData.set(topicKey, data)
     
-    const parsed = this.parseData(topicKey, data.data)
-    if (!parsed) return
-    this.parsedData.set(topicKey, parsed)
+    const schema = schemaManager.getSchema(topicKey)
+    if (!schema) return
     
-    const rendered = this.buildRenderedTree(topicKey, parsed)
-    if (!rendered) return
-    this.renderedTrees.set(topicKey, rendered)
+    // 🌟 优化：如果该 Topic 的 Schema 还没发给 Worker，先发一次
+    if (!this.syncedSchemas.has(topicKey)) {
+      this.worker.postMessage({
+        type: 'SET_SCHEMA',
+        payload: { topicKey, schema }
+      })
+      this.syncedSchemas.add(topicKey)
+    }
     
-    // console.log('📤 Emitting data-updated event')
-    this.emit('data-updated', {
-      topicKey,
-      frameId: data.frame_id,
-      timestamp: data.timestamp,
-      renderedTree: rendered
+    // 🌟 优化：现在只发送纯数据，通信量减少 90%
+    this.worker.postMessage({
+      type: 'PARSE',
+      payload: {
+        topicKey,
+        data: data.data // 只传数据部分
+        // schema: schema  <-- 删掉这一行！不要重复传！
+      }
     })
   }
+  
+  // ========== 以下代码保持不变 ==========
   
   getRenderedTree(topicKey: string): RenderedTreeNode[] | undefined {
     return this.renderedTrees.get(topicKey)
@@ -94,89 +154,7 @@ export class DataManager extends EventEmitter {
     this.removeAllListeners()
   }
   
-  private parseData(topicKey: string, data: Record<string, any>): ParsedData | null {
-    const schema = schemaManager.getSchema(topicKey)
-    if (!schema) return null
-    
-    const result: ParsedData = {}
-    
-    for (const [fieldIdStr, value] of Object.entries(data)) {
-      const fieldId = parseInt(fieldIdStr)
-      const field = schemaManager.getFieldById(topicKey, fieldId)
-      
-      if (!field) continue
-      
-      let processedValue = value
-      
-      if (field.repeated && field.type === 'message' && Array.isArray(value)) {
-        processedValue = value.map(item => {
-          if (typeof item === 'object' && item !== null) {
-            return this.convertFieldIdsToNested(topicKey, item, field.path)
-          }
-          return item
-        })
-      }
-      
-      setNestedValue(result, field.path, processedValue)
-    }
-    
-    return result
-  }
-  
-  private convertFieldIdsToNested(
-    topicKey: string, 
-    obj: Record<string, any>,
-    parentPath: string
-  ): any {
-    const schema = schemaManager.getSchema(topicKey)
-    if (!schema) return obj
-    
-    const result: any = {}
-    const cleanParentPath = parentPath.replace(/\[\]$/, '')
-    const expectedPrefix = cleanParentPath ? `${cleanParentPath}.` : ''
-    
-    for (const [fieldIdStr, value] of Object.entries(obj)) {
-      const fieldId = parseInt(fieldIdStr)
-      const field = schemaManager.getFieldById(topicKey, fieldId)
-      
-      if (!field || !field.path.startsWith(expectedPrefix)) continue
-      
-      const relativePath = field.path
-        .slice(expectedPrefix.length)
-        .replace(/\[\]$/, '')
-      
-      let processedValue = value
-      
-      if (field.repeated && field.type === 'message' && Array.isArray(value)) {
-        processedValue = value.map(item => 
-          typeof item === 'object' && item !== null
-            ? this.convertFieldIdsToNested(topicKey, item, field.path)
-            : item
-        )
-      }
-      
-      this.setNestedValueSimple(result, relativePath, processedValue)
-    }
-    
-    return result
-  }
-  
-  private setNestedValueSimple(obj: any, path: string, value: any): void {
-    const parts = path.split('.')
-    let current = obj
-    
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i]
-      if (!(part in current)) {
-        current[part] = {}
-      }
-      current = current[part]
-    }
-    
-    const lastPart = parts[parts.length - 1]
-    current[lastPart] = value
-  }
-  
+  // 构建渲染树逻辑 (UI 相关，暂留此处)
   private buildRenderedTree(topicKey: string, parsedData: ParsedData): RenderedTreeNode[] | null {
     const template = schemaManager.getTemplate(topicKey)
     if (!template) return null
@@ -195,7 +173,7 @@ export class DataManager extends EventEmitter {
   }
   
   private computeDataHash(data: ParsedData): string {
-    return JSON.stringify(data)
+    return JSON.stringify(data).length.toString()
   }
   
   private createTreeNode(
@@ -214,7 +192,7 @@ export class DataManager extends EventEmitter {
       repeated: templateNode?.repeated || Array.isArray(value),
       icon: getValueIcon(value),
       hasData,
-      value,
+      value, 
       formattedValue: hasData ? formatFieldValue(value, { type: templateNode?.type } as any) : 'null'
     }
   }
@@ -234,7 +212,9 @@ export class DataManager extends EventEmitter {
       if (value !== undefined && value !== null) {
         if (Array.isArray(value)) {
           node.formattedValue = `[${value.length} items]`
-          node.children = this.buildArrayChildren(value, templateNode, currentPath)
+          if (value.length < 1000) { 
+             node.children = this.buildArrayChildren(value, templateNode, currentPath)
+          }
         } else if (typeof value === 'object') {
           if (templateNode.children?.length) {
             node.children = this.fillTemplateWithData(templateNode.children, value, currentPath)

@@ -4,14 +4,26 @@
     "composite": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "types": ["vite/client"],
-    "noEmit": false,  // ✅ 显式设置为 false，覆盖继承的配置
+    "noEmit": false,
 
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+
+    /* 🌟 新增路径映射 */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/driver": ["./src/drivers/pack/index.ts"] 
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "src/packages/data-panel/managers/SchemaManager.ts", "src/packages/data-panel/managers/DataManager.ts", "src/packages/data-panel/components/TopicDetailPanel.vue", "src/packages/data-panel/components/TopicList.vue", "packages/data-panel/utils/protoParser.ts"]
+  "include": [
+    "src/**/*.ts", 
+    "src/**/*.tsx", 
+    "src/**/*.vue",
+    "src/drivers/**/*.ts" // 确保驱动代码被包含
+  ]
 }

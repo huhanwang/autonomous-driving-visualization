@@ -1,4 +1,4 @@
-// core/DataBus.ts - 数据总线（核心调度器）
+// Frontend/src/core/DataBus.ts - 数据总线（核心调度器）
 
 import { EventEmitter } from './EventEmitter'
 import { WebSocketClient } from './WebSocketClient'
@@ -21,27 +21,6 @@ export interface DataBusConfig {
 
 /**
  * 数据总线 - 整个应用的数据流中心
- * 
- * 职责：
- * 1. 管理WebSocket连接
- * 2. 路由消息到对应模块
- * 3. 提供发布-订阅机制
- * 4. 管理模块生命周期
- * 5. 缓存数据状态
- * 
- * @example
- * ```typescript
- * const dataBus = new DataBus({ debug: true })
- * await dataBus.connect('ws://localhost:9002')
- * 
- * // 订阅数据
- * dataBus.subscribe('topic:*', (data) => {
- *   console.log('Received:', data)
- * })
- * 
- * // 注册模块
- * dataBus.registerModule(myModule)
- * ```
  */
 export class DataBus extends EventEmitter {
   private config: DataBusConfig
@@ -55,7 +34,7 @@ export class DataBus extends EventEmitter {
   private modules: Map<string, Module> = new Map()
   private activeModules: Set<string> = new Set()
   
-  // 订阅管理
+  // 订阅管理 (✅ 保持 Map 的值为通用类型，具体类型在 subscribe 时约束)
   private subscriptions: Map<string, Set<DataCallback>> = new Map()
   
   constructor(config: DataBusConfig = {}) {
@@ -226,28 +205,27 @@ export class DataBus extends EventEmitter {
     return Array.from(this.modules.keys())
   }
   
-  // ========== 发布-订阅 ==========
+  // ========== 发布-订阅 (✅ 修改：支持泛型) ==========
   
   /**
    * 订阅数据更新
-   * 
-   * @param topic Topic名称或通配符 (支持 'topic:*')
+   * * @param topic Topic名称或通配符 (支持 'topic:*')
    * @param callback 回调函数
    * @returns 取消订阅函数
    */
-  subscribe(topic: string, callback: DataCallback): UnsubscribeFn {
+  subscribe<T = any>(topic: string, callback: DataCallback<T>): UnsubscribeFn {
     if (!this.subscriptions.has(topic)) {
       this.subscriptions.set(topic, new Set())
     }
     
-    this.subscriptions.get(topic)!.add(callback)
+    this.subscriptions.get(topic)!.add(callback as DataCallback)
     
     if (this.config.debug) {
       console.log('[DataBus] Subscribed:', topic)
     }
     
     // 返回取消订阅函数
-    return () => this.unsubscribe(topic, callback)
+    return () => this.unsubscribe(topic, callback as DataCallback)
   }
   
   /**
@@ -272,9 +250,9 @@ export class DataBus extends EventEmitter {
   }
   
   /**
-   * 发布数据
+   * 发布数据 (✅ 修改：支持泛型)
    */
-  publish(topic: string, data: any): void {
+  publish<T = any>(topic: string, data: T): void {
     if (this.config.debug) {
       console.log('[DataBus] Publishing:', topic)
     }
@@ -419,7 +397,6 @@ export class DataBus extends EventEmitter {
   /**
    * 设置WebSocket事件处理器
    */
-  // DataBus.ts 中 setupWebSocketHandlers 的修复
   private setupWebSocketHandlers(): void {
     // 连接事件
     this.wsClient.on('connected', (data) => {
@@ -436,10 +413,7 @@ export class DataBus extends EventEmitter {
     
     // 消息事件
     this.wsClient.on('message', (message: Message) => {
-      // 1. 路由到消息处理器
-      // this.messageRouter.route(message)
-      
-      // 2. 分发给所有模块
+      // 1. 分发给所有模块
       for (const [moduleId, module] of this.modules.entries()) {
         if (this.activeModules.has(moduleId)) {
           try {
@@ -450,8 +424,8 @@ export class DataBus extends EventEmitter {
         }
       }
       
-      // 3. ✅ 修复：发布完整消息，不只是 payload
-      this.publish(message.type, message)  // 改这里！传递完整 message
+      // 2. 发布完整消息
+      this.publish(message.type, message)
     })
   }
   
@@ -460,8 +434,8 @@ export class DataBus extends EventEmitter {
    */
   private matchPattern(str: string, pattern: string): boolean {
     const regexPattern = pattern
-      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*')
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')  // 转义特殊字符
+      .replace(/\*/g, '.*')                     // * 转为 .*
     const regex = new RegExp(`^${regexPattern}$`)
     return regex.test(str)
   }

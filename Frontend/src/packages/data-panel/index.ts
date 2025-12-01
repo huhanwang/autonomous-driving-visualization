@@ -1,6 +1,6 @@
 export { schemaManager, SchemaManager } from './managers/SchemaManager'
 export { dataManager, DataManager } from './managers/DataManager'
-export * from './utils/protoParser'
+
 export { default as TopicList } from './components/TopicList.vue'
 export { default as TopicDetailPanel } from './components/TopicDetailPanel.vue'
 export type { TopicSchema, TopicField, TopicData } from './types'
