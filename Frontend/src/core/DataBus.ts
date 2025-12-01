@@ -3,7 +3,7 @@
 import { EventEmitter } from './EventEmitter'
 import { WebSocketClient } from './WebSocketClient'
 import { MessageRouter } from './MessageRouter'
-import { DataCache } from './DataCache'
+import { DataCache } from './data/DataCache'
 import type { Message } from './types/message'
 import type { Module } from './types/module'
 import type { DataCallback, UnsubscribeFn } from './types/common'

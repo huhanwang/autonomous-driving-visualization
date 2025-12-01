@@ -2,8 +2,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { TopicSubscription } from '@/types/topic'
-import { schemaManager } from '@/packages/data-panel/managers/SchemaManager'
-import { dataManager } from '@/packages/data-panel/managers/DataManager'
+import { schemaManager } from '@/core/data/SchemaManager'
+import { dataManager } from '@/core/data/DataManager'
 
 export const useTopicsStore = defineStore('topics', () => {
   // 订阅状态
@@ -109,7 +109,10 @@ export const useTopicsStore = defineStore('topics', () => {
   }
   
   // ========== 订阅管理 ==========
-  
+  function initialize() {
+    console.log('🔄 TopicsStore: Resetting state...')
+    clear()
+  }
   /**
    * 初始化可用的topics
    */
@@ -196,6 +199,7 @@ export const useTopicsStore = defineStore('topics', () => {
     handleTopicDataResponse,
     
     // 订阅管理
+    initialize,
     initializeTopics,
     subscribeTopic,
     unsubscribeTopic,

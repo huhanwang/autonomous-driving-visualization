@@ -168,8 +168,8 @@ import { VideoPlay, Clock, Grid, Document, Refresh, Search, Fold, Expand } from 
 import { formatTimestamp } from '@/utils/time'
 import { ElMessage } from 'element-plus'
 
-import { dataManager, type RenderedTreeNode, type DataUpdateEvent } from '../managers/DataManager'
-import { schemaManager } from '../managers/SchemaManager'
+import { dataManager, type RenderedTreeNode, type DataUpdateEvent } from '@/core/data/DataManager'
+import { schemaManager } from '@/core/data/SchemaManager'
 
 const props = defineProps<{
   selectedTopic: string

@@ -154,7 +154,7 @@ import { useTopicsStore } from '@/stores/topics'
 import { usePlaybackStore } from '@/stores/playback'
 import { Search, VideoPlay, Clock, ArrowRight } from '@element-plus/icons-vue'
 import { formatTimestamp } from '@/utils/time'
-import { dataManager } from '../managers/DataManager'
+import { dataManager } from '@/core/data/DataManager'
 import { useSelectedTopic } from '@/composables/useSelectedTopic'
 
 

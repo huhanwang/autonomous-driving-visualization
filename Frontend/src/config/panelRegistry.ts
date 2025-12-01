@@ -1,4 +1,4 @@
-// config/panelRegistry.ts - 面板注册表
+// Frontend/src/config/panelRegistry.ts
 
 import type { PanelDefinition } from '@/types/layout'
 import {
@@ -12,27 +12,28 @@ import {
   Setting
 } from '@element-plus/icons-vue'
 
-// 🆕 从包导入组件（不要指定 components 子目录）
-import { TopicList, TopicDetailPanel } from '@/packages/data-panel'
-import Visualization2D from '@/components/Visualization2D.vue'
-import Visualization3D from '@/components/Visualization3D.vue'
-import ImageGallery from '@/components/ImageGallery.vue'
-import TimelineChart from '@/components/TimelineChart.vue'
+// 🌟 [关键修正] 更新引用路径到新的 packages 目录
+// 注意：如果你的组件改名为 index.vue，这里要写清楚
+import TopicList from '@/packages/data-panel/components/TopicList.vue'
+import TopicDetailPanel from '@/packages/data-panel/components/TopicDetailPanel.vue'
+
+import Visualization2D from '@/packages/vis-2d/index.vue' // 原 Visualization2D.vue
+import Visualization3D from '@/packages/vis-3d/index.vue' // 原 Visualization3D.vue
+import ImageGallery from '@/packages/image-gallery/index.vue' // 原 ImageGallery.vue
+import TimelineChart from '@/packages/timeline/index.vue' // 原 TimelineChart.vue
+
+// 这些通用组件依然在 components 下
 import InfoPanel from '@/components/InfoPanel.vue'
 import DisplaySettings from '@/components/DisplaySettings.vue'
 
-/**
- * 面板注册表
- * 所有可用的面板都在这里注册
- */
 export const panelDefinitions: PanelDefinition[] = [
   {
     id: 'topicList',
     name: 'Topic列表',
     icon: List,
-    component: TopicList,
+    component: TopicList, // 确保这里不是 undefined
     minWidth: 300,
-    allowedZones: [1], // 只能在左侧区域
+    allowedZones: [1],
     description: '显示所有可用的数据主题'
   },
   {
@@ -41,7 +42,7 @@ export const panelDefinitions: PanelDefinition[] = [
     icon: Document,
     component: TopicDetailPanel,
     minWidth: 400,
-    allowedZones: [1, 2], // 可以在左侧或中间
+    allowedZones: [1, 2],
     description: '显示选中Topic的数据结构'
   },
   {
@@ -50,7 +51,7 @@ export const panelDefinitions: PanelDefinition[] = [
     icon: Grid,
     component: Visualization2D,
     minWidth: 600,
-    allowedZones: [2, 3], // 可以在中间或右侧
+    allowedZones: [2, 3],
     description: '2D平面可视化显示'
   },
   {
@@ -80,6 +81,7 @@ export const panelDefinitions: PanelDefinition[] = [
     allowedZones: [2, 3],
     description: '显示数据随时间变化的曲线'
   },
+  // ... InfoPanel 和 DisplaySettings 保持不变
   {
     id: 'info',
     name: '信息面板',
@@ -100,16 +102,10 @@ export const panelDefinitions: PanelDefinition[] = [
   }
 ]
 
-/**
- * 面板注册表 Map（用于快速查找）
- */
 export const panelRegistry = new Map<string, PanelDefinition>(
   panelDefinitions.map(panel => [panel.id, panel])
 )
 
-/**
- * 根据区域ID获取允许的面板列表
- */
 export function getPanelsForZone(zoneId: number): PanelDefinition[] {
   return panelDefinitions.filter(
     panel => !panel.allowedZones || panel.allowedZones.includes(zoneId)

@@ -1,4 +1,4 @@
-// stores/playback.ts - 混合模式：同时支持 DataBus 和旧 WebSocket
+// Frontend/src/stores/playback.ts
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -7,7 +7,6 @@ import type {
   PlayMode,
   TimestampType 
 } from '@/types/playback'
-import { useWebSocket } from '@/composables/useWebSocket'
 import { useDataBus } from '@/composables/useDataBus'
 import { useTopicsStore } from './topics'
 import { ElMessage } from 'element-plus'
@@ -33,11 +32,11 @@ export const usePlaybackStore = defineStore('playback', () => {
   const speedMultiplier = ref(1.0)
   const availableKeys = ref<string[]>([])
   
-  // 🆕 模式标识
-  const useDataBusMode = ref(true)
-  
-  let wsInstance: ReturnType<typeof useWebSocket> | null = null
+  // 核心依赖：只使用 DataBus
   const { dataBus, subscribe, sendCommand: sendDataBusCommand, request } = useDataBus()
+  
+  // 🌟 [修复] 添加初始化锁，防止重复订阅
+  let isInitialized = false
   
   // ========== 计算属性 ==========
   
@@ -50,86 +49,70 @@ export const usePlaybackStore = defineStore('playback', () => {
   
   const progressPercent = computed(() => progress.value * 100)
   
-  const wsConnected = computed(() => {
-    if (useDataBusMode.value) {
-      return dataBus.isConnected()
-    }
-    return wsInstance?.connected.value ?? false
-  })
+  const wsConnected = computed(() => dataBus.isConnected())
   
   // ========== 初始化方法 ==========
   
   /**
-   * 🆕 初始化 DataBus 订阅
+   * 初始化 DataBus 订阅
+   * 🌟 [修复] 增加防抖检查
    */
   function initialize() {
+    if (isInitialized) {
+      console.log('♻️ Playback store already initialized, skipping subscription')
+      return
+    }
+
     console.log('🔧 Initializing playback store with DataBus')
     
     const topics = useTopicsStore()
     
-    // 订阅消息
+    // 订阅系统控制消息
     subscribe('INIT_INFO', handleInitInfo)
     subscribe('PLAYBACK_STATUS', handlePlaybackStatus)
     subscribe('COMMAND_ACK', handleCommandAck)
     subscribe('ERROR', handleError)
     subscribe('SUBSCRIPTION_ACK', handleSubscriptionAck)
     
-    // 订阅 Topic 相关消息（转发给 topics store）
+    // 订阅 Topic 相关消息（转发给 topics store 处理）
     subscribe('TOPIC_SCHEMA', (msg: any) => topics.handleTopicSchema(msg))
     subscribe('TOPIC_DATA', (msg: any) => topics.handleTopicData(msg))
     subscribe('TOPIC_SCHEMA_RESPONSE', (msg: any) => topics.handleTopicSchemaResponse(msg))
     subscribe('TOPIC_DATA_RESPONSE', (msg: any) => topics.handleTopicDataResponse(msg))
     
-    console.log('✅ Playback store initialized')
-  }
-  
-  /**
-   * 旧方法：设置 WebSocket 实例（保留兼容）
-   */
-  function setWebSocket(ws: ReturnType<typeof useWebSocket>) {
-    console.log('📡 Using old WebSocket mode')
-    useDataBusMode.value = false
-    wsInstance = ws
-    
-    const topics = useTopicsStore()
-    
-    // 注册消息处理器（旧方式）
-    ws.on('INIT_INFO', handleInitInfo)
-    ws.on('PLAYBACK_STATUS', handlePlaybackStatus)
-    ws.on('COMMAND_ACK', handleCommandAck)
-    ws.on('ERROR', handleError)
-    ws.on('SUBSCRIPTION_ACK', handleSubscriptionAck)
-    
-    ws.on('TOPIC_SCHEMA', (msg: any) => topics.handleTopicSchema(msg))
-    ws.on('TOPIC_DATA', (msg: any) => topics.handleTopicData(msg))
-    ws.on('TOPIC_SCHEMA_RESPONSE', (msg: any) => topics.handleTopicSchemaResponse(msg))
-    ws.on('TOPIC_DATA_RESPONSE', (msg: any) => topics.handleTopicDataResponse(msg))
+    isInitialized = true
+    console.log('✅ Playback store initialized (Listeners Attached)')
   }
   
   // ========== 消息处理 ==========
   
   function handleInitInfo(msg: any) {
-    console.log('📥 Received INIT_INFO:', msg)
-    
-    // ✅ 兼容两种格式
+    // 兼容直接 Payload 或 {data: Payload} 格式
     const data = msg.data || msg
+    
+    console.log('📥 Received INIT_INFO')
     
     serverVersion.value = data.server_version || ''
     availableKeys.value = data.available_keys || []
     
+    // 通知 topics store 初始化列表
     const topics = useTopicsStore()
-    topics.initializeTopics(data.available_keys || [])
+    // 兼容 topics store 可能存在的两种初始化方法名
+    if (topics.initializeTopics) {
+      topics.initializeTopics(data.available_keys || [])
+    } else if (topics.initialize) {
+      topics.initialize(data.available_keys || [])
+    }
     
     if (data.initial_status) {
       updateStatus(data.initial_status)
     }
     
     connected.value = true
-    console.log('✅ Store connected set to true')
   }
   
   function handlePlaybackStatus(msg: any) {
-    updateStatus(msg.data)
+    updateStatus(msg.data || msg)
   }
   
   function updateStatus(data: PlaybackStatus) {
@@ -152,21 +135,14 @@ export const usePlaybackStore = defineStore('playback', () => {
   }
   
   function handleCommandAck(msg: any) {
-    console.log('📥 Received COMMAND_ACK:', msg)
-    
-    if (msg.success) {
-      ElMessage.success(`${msg.command} 成功`)
-    } else {
+    if (!msg.success) {
       console.error(`Command ${msg.command} failed: ${msg.message}`)
       ElMessage.error(`${msg.command} 失败: ${msg.message}`)
     }
   }
   
   function handleSubscriptionAck(msg: any) {
-    console.log('📥 Received SUBSCRIPTION_ACK:', msg)
-    
     if (msg.success) {
-      console.log('✅ Successfully subscribed to:', msg.topic_key)
       ElMessage.success(`订阅成功: ${msg.topic_key}`)
     } else {
       console.error('❌ Failed to subscribe:', msg.topic_key, msg.message)
@@ -175,6 +151,9 @@ export const usePlaybackStore = defineStore('playback', () => {
   }
   
   function handleError(msg: any) {
+    // 忽略心跳错误
+    if (msg.message && msg.message.includes('HEARTBEAT')) return;
+    
     console.error('📥 Received ERROR:', msg)
     ElMessage.error(`服务器错误: ${msg.message}`)
   }
@@ -182,125 +161,61 @@ export const usePlaybackStore = defineStore('playback', () => {
   // ========== 通用发送方法 ==========
   
   function sendCommand(type: string, params?: any): boolean {
-    console.log('📤 sendCommand called:', type, params)
-    
-    if (useDataBusMode.value) {
-      // 🆕 DataBus 模式
-      if (!dataBus.isConnected()) {
-        console.error('❌ DataBus not connected')
-        ElMessage.error('DataBus 未连接')
-        return false
-      }
-      return sendDataBusCommand(type, params)
-    } else {
-      // 旧模式
-      if (!wsInstance) {
-        console.error('❌ WebSocket instance not set')
-        ElMessage.error('WebSocket 未连接')
-        return false
-      }
-      
-      if (!wsInstance.connected.value) {
-        console.error('❌ WebSocket not connected')
-        ElMessage.error('WebSocket 未连接')
-        return false
-      }
-      
-      return wsInstance.send(type, params)
+    if (!dataBus.isConnected()) {
+      // 避免重复弹窗
+      if (!wsConnected.value) ElMessage.error('DataBus 未连接')
+      return false
     }
+    return sendDataBusCommand(type, params)
   }
   
-  // ========== 🆕 主动拉取接口 ==========
+  // ========== 主动拉取接口 ==========
   
   async function requestTopicSchema(topicKey: string): Promise<any> {
-    if (useDataBusMode.value) {
-      const response = await request('GET_TOPIC_SCHEMA', { topic_key: topicKey })
-      return response.schema
-    } else {
-      // 旧模式实现
-      return new Promise((resolve, reject) => {
-        // ... 旧的实现
-      })
-    }
+    const response = await request('GET_TOPIC_SCHEMA', { topic_key: topicKey })
+    return response.schema
   }
   
   async function requestTopicData(topicKey: string): Promise<any> {
-    if (useDataBusMode.value) {
-      return await request('GET_TOPIC_DATA', { topic_key: topicKey })
-    } else {
-      // 旧模式实现
-      return new Promise((resolve, reject) => {
-        // ... 旧的实现
-      })
-    }
+    return await request('GET_TOPIC_DATA', { topic_key: topicKey })
   }
   
-  // ========== 控制方法 ==========
+  // ========== 业务控制方法 ==========
   
-  function play() {
-    console.log('🎮 Calling play()')
-    return sendCommand('PLAY')
-  }
-  
-  function pause() {
-    console.log('🎮 Calling pause()')
-    return sendCommand('PAUSE')
-  }
-  
-  function stop() {
-    console.log('🎮 Calling stop()')
-    return sendCommand('STOP')
-  }
-  
-  function reset() {
-    console.log('🎮 Calling reset()')
-    return sendCommand('RESET')
-  }
-  
-  function nextFrame() {
-    console.log('🎮 Calling nextFrame()')
-    return sendCommand('NEXT_FRAME')
-  }
-  
-  function prevFrame() {
-    console.log('🎮 Calling prevFrame()')
-    return sendCommand('PREV_FRAME')
-  }
+  function play() { return sendCommand('PLAY') }
+  function pause() { return sendCommand('PAUSE') }
+  function stop() { return sendCommand('STOP') }
+  function reset() { return sendCommand('RESET') }
+  function nextFrame() { return sendCommand('NEXT_FRAME') }
+  function prevFrame() { return sendCommand('PREV_FRAME') }
   
   function seekToFrame(frameId: number) {
-    console.log('🎮 Calling seekToFrame:', frameId)
     return sendCommand('SEEK_FRAME', { frame_id: frameId })
   }
   
   function seekToTime(timestamp: number) {
-    console.log('🎮 Calling seekToTime:', timestamp)
     return sendCommand('SEEK_TIME', { timestamp })
   }
   
   function seekToProgress(prog: number) {
-    console.log('🎮 Calling seekToProgress:', prog)
     return sendCommand('SEEK_PROGRESS', { progress: prog })
   }
   
   function setSpeed(multiplier: number) {
-    console.log('🎮 Calling setSpeed:', multiplier)
     return sendCommand('SET_SPEED', { multiplier })
   }
   
   function getStatus() {
-    console.log('🎮 Calling getStatus()')
     return sendCommand('GET_STATUS')
   }
   
   // ========== 订阅方法 ==========
   
   function subscribeTopic(topicKey: string) {
-    console.log('🎯 Subscribing to topic:', topicKey)
     return sendCommand('SUBSCRIBE_TOPIC', { topic_key: topicKey })
   }
   
   function getAvailableTopics() {
-    console.log('📋 Getting available topics')
     return sendCommand('GET_AVAILABLE_TOPICS')
   }
   
@@ -319,7 +234,6 @@ export const usePlaybackStore = defineStore('playback', () => {
     speedMultiplier,
     availableKeys,
     wsConnected,
-    useDataBusMode,
     
     // 计算属性
     totalFrames,
@@ -329,12 +243,9 @@ export const usePlaybackStore = defineStore('playback', () => {
     
     // 初始化
     initialize,
-    setWebSocket,
     
-    // 通用方法
+    // 核心操作
     sendCommand,
-    
-    // 主动拉取
     requestTopicSchema,
     requestTopicData,
     
