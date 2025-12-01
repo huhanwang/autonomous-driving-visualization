@@ -52,6 +52,7 @@ export class DataBus extends EventEmitter {
     this.wsClient = new WebSocketClient({
       reconnect: this.config.reconnect,
       reconnectInterval: this.config.reconnectInterval,
+      heartbeatInterval: 0,
       debug: this.config.debug
     })
     
@@ -253,9 +254,9 @@ export class DataBus extends EventEmitter {
    * 发布数据 (✅ 修改：支持泛型)
    */
   publish<T = any>(topic: string, data: T): void {
-    if (this.config.debug) {
-      console.log('[DataBus] Publishing:', topic)
-    }
+    // if (this.config.debug) {
+    //   console.log('[DataBus] Publishing:', topic)
+    // }
     
     // 精确匹配
     const callbacks = this.subscriptions.get(topic)

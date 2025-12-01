@@ -307,38 +307,42 @@ function handleDataUpdate(event: DataUpdateEvent) {
 // 加载逻辑
 async function loadTopicContent() {
   if (!props.selectedTopic) return
+  
+  // 1. 开启加载状态，但我们不打算让它转很久
   loading.value = true
   
-  try {
-    if (!schemaManager.hasSchema(props.selectedTopic)) {
-      try {
-        const schema = await playback.requestTopicSchema(props.selectedTopic)
-        schemaManager.setSchema(props.selectedTopic, schema)
-      } catch (e) {
-        console.warn('Schema request fallback', e)
-      }
-    }
-    
-    try {
-      const response = await playback.requestTopicData(props.selectedTopic)
+  // 2. 立即发起 Schema 请求 (不使用 await 阻塞主流程)
+  if (!schemaManager.hasSchema(props.selectedTopic)) {
+    playback.requestTopicSchema(props.selectedTopic)
+      .then(schema => {
+        if (schema) schemaManager.setSchema(props.selectedTopic, schema)
+      })
+      .catch(() => {
+        // 忽略超时，反正我们已经订阅了，Schema 会通过推送送达
+        console.log('Schema request skipped, waiting for push...')
+      })
+  }
+
+  // 3. 立即发起数据请求 (同样不阻塞)
+  playback.requestTopicData(props.selectedTopic)
+    .then(response => {
       if (response && response.data !== null) {
         dataManager.updateData(props.selectedTopic, {
           frame_id: response.frame_id!,
           timestamp: response.timestamp!,
           data: response.data
         })
+        syncDataFromManager()
       }
-    } catch (e) {
-      // ignore
-    }
+    })
+    .catch(() => { /* ignore */ })
 
-    syncDataFromManager()
-  } catch (error) {
-    console.error(error)
-    ElMessage.warning('同步延迟')
-  } finally {
+  // 4. 关键点：不等请求结果，直接结束 loading 状态
+  // 因为我们已经订阅了 Topic，数据很快就会通过 WebSocket 推送过来
+  // 让 UI 处于"准备就绪"状态，一旦推送到达，throttledUpdate 会自动刷新界面
+  setTimeout(() => {
     loading.value = false
-  }
+  }, 300) // 给一个极短的视觉缓冲即可
 }
 
 async function refreshData() {

@@ -21,7 +21,8 @@ import { DataBus } from '@/core'
 const dataBus = new DataBus({
   wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:9002',
   reconnect: true,
-  debug: import.meta.env.DEV
+  // 修改为：读取自定义的 VITE_DEBUG 变量，如果是字符串 'true' 才开启
+  debug: false
 })
 
 // 挂载到全局

@@ -103,9 +103,9 @@ export class WebSocketClient extends EventEmitter {
           try {
             const message: Message = JSON.parse(event.data)
             
-            if (this.config.debug) {
-              console.log('[WS] Received:', message.type)
-            }
+            // if (this.config.debug) {
+            //   console.log('[WS] Received:', message.type)
+            // }
             
             this.emit('message', message)
           } catch (error) {

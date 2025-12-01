@@ -87,8 +87,20 @@
   /**
    * 获取面板组件
    */
-  function getPanelComponent(panelId: string) {
-    return panelRegistry.get(panelId)?.component
+   function getPanelComponent(panelId: string) {
+    const panel = panelRegistry.get(panelId)
+    
+    // 如果找不到面板定义，或者组件未定义，返回一个简单的错误提示组件
+    if (!panel || !panel.component) {
+      console.warn(`[LayoutZone] Panel component not found for ID: ${panelId}`)
+      // 返回一个内联的错误提示组件
+      return {
+        template: `<div style="padding: 20px; color: red;">⚠️ Unknown Panel: {{ id }}</div>`,
+        setup() { return { id: panelId } }
+      }
+    }
+    
+    return panel.component
   }
   
   /**
