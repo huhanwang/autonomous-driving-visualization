@@ -1,4 +1,4 @@
-// Frontend/src/config/panelRegistry.ts
+// src/config/panelRegistry.ts
 
 import type { PanelDefinition } from '@/types/layout'
 import {
@@ -9,29 +9,33 @@ import {
   Picture,
   TrendCharts,
   InfoFilled,
-  Setting
+  Setting,
+  FolderOpened // 🌟 [新增] 引入文件夹图标
 } from '@element-plus/icons-vue'
 
-// 🌟 [关键修正] 更新引用路径到新的 packages 目录
-// 注意：如果你的组件改名为 index.vue，这里要写清楚
+// 业务组件
 import TopicList from '@/packages/data-panel/components/TopicList.vue'
 import TopicDetailPanel from '@/packages/data-panel/components/TopicDetailPanel.vue'
 
-import Visualization2D from '@/packages/vis-2d/index.vue' // 原 Visualization2D.vue
-import Visualization3D from '@/packages/vis-3d/index.vue' // 原 Visualization3D.vue
-import ImageGallery from '@/packages/image-gallery/index.vue' // 原 ImageGallery.vue
-import TimelineChart from '@/packages/timeline/index.vue' // 原 TimelineChart.vue
+import Visualization2D from '@/packages/vis-2d/index.vue'
+import Visualization3D from '@/packages/vis-3d/index.vue'
+import ImageGallery from '@/packages/image-gallery/index.vue'
+import TimelineChart from '@/packages/timeline/index.vue'
 
-// 这些通用组件依然在 components 下
+// 🌟 [新增] 引入对象管理器组件
+// (请确保你已在上一步创建了此文件，路径需匹配)
+import ObjectManagerPanel from '@/packages/data-panel/components/ObjectManagerPanel.vue'
+
+// 通用组件
 import InfoPanel from '@/components/InfoPanel.vue'
-import DisplaySettings from '@/components/DisplaySettings.vue'
+// import DisplaySettings from '@/components/DisplaySettings.vue' // ❌ [移除] 原有的设置面板
 
 export const panelDefinitions: PanelDefinition[] = [
   {
     id: 'topicList',
     name: 'Topic列表',
     icon: List,
-    component: TopicList, // 确保这里不是 undefined
+    component: TopicList,
     minWidth: 300,
     allowedZones: [1],
     description: '显示所有可用的数据主题'
@@ -81,7 +85,6 @@ export const panelDefinitions: PanelDefinition[] = [
     allowedZones: [2, 3],
     description: '显示数据随时间变化的曲线'
   },
-  // ... InfoPanel 和 DisplaySettings 保持不变
   {
     id: 'info',
     name: '信息面板',
@@ -91,14 +94,15 @@ export const panelDefinitions: PanelDefinition[] = [
     allowedZones: [1, 2, 3],
     description: '显示系统信息和统计数据'
   },
+  // 🌟 [修改] 将原来的 settings 替换为 对象管理器
   {
-    id: 'settings',
-    name: '显示设置',
-    icon: Setting,
-    component: DisplaySettings,
+    id: 'settings',       // 保持 ID 不变，这样现有的布局配置(layoutPresets)依然有效
+    name: '对象管理',     // 修改显示名称
+    icon: FolderOpened,   // 修改图标 (如果不喜欢，可以换回 Setting)
+    component: ObjectManagerPanel, // 🌟 核心：替换为对象管理器组件
     minWidth: 300,
-    allowedZones: [3],
-    description: '可视化显示设置'
+    allowedZones: [1, 2, 3], // 扩展允许的区域，方便在左侧或右侧显示
+    description: '图层与对象属性管理'
   }
 ]
 

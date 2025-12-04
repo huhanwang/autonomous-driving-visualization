@@ -8,6 +8,9 @@ import type { Message } from './types/message'
 import type { Module } from './types/module'
 import type { DataCallback, UnsubscribeFn } from './types/common'
 
+// 🆕 引入 SceneManager (假设文件位于 src/core/vis/SceneManager.ts)
+import { sceneManager } from './vis/SceneManager'
+
 /**
  * 数据总线配置
  */
@@ -411,8 +414,16 @@ export class DataBus extends EventEmitter {
     this.wsClient.on('error', (data) => {
       this.emit('error', data)
     })
+
+    // 🆕 监听二进制消息并转发给 SceneManager
+    this.wsClient.on('binary', (data: ArrayBuffer) => {
+      // 直接调用 SceneManager 处理二进制流
+      sceneManager.handleBinaryMessage(data)
+      // 如果需要其他模块监听二进制流，也可以 emit 出去，但通常 SceneManager 是唯一消费者
+      // this.emit('binary', data) 
+    })
     
-    // 消息事件
+    // 消息事件 (JSON 信令)
     this.wsClient.on('message', (message: Message) => {
       // 1. 分发给所有模块
       for (const [moduleId, module] of this.modules.entries()) {

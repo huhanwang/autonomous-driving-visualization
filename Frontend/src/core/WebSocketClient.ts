@@ -68,6 +68,7 @@ export class WebSocketClient extends EventEmitter {
         }
         
         this.ws = new WebSocket(url)
+        this.ws.binaryType = 'arraybuffer'
         
         this.ws.onopen = () => {
           if (this.config.debug) {
@@ -99,18 +100,45 @@ export class WebSocketClient extends EventEmitter {
           reject(error)
         }
         
-        this.ws.onmessage = (event) => {
-          try {
-            const message: Message = JSON.parse(event.data)
-            
-            // if (this.config.debug) {
-            //   console.log('[WS] Received:', message.type)
-            // }
-            
-            this.emit('message', message)
-          } catch (error) {
-            console.error('[WS] Failed to parse message:', error)
-            this.emit('error', { error })
+        this.ws.onmessage = async (event) => { // 🌟 改为 async 以支持 Blob.arrayBuffer()
+          const data = event.data
+
+          // 1. 处理 ArrayBuffer (正常情况)
+          if (data instanceof ArrayBuffer) {
+            // console.log('[WS] binary:', data)
+            this.emit('binary', data)
+            return
+          }
+          
+          // 2. 处理 Blob (异常情况：binaryType 设置失效)
+          // 这是一个兜底逻辑，防止应用崩溃
+          if (data instanceof Blob) {
+             // console.warn('[WS] Received Blob instead of ArrayBuffer. Converting...')
+             try {
+                 const buffer = await data.arrayBuffer()
+                 this.emit('binary', buffer)
+             } catch (e) {
+                 console.error('[WS] Failed to convert Blob:', e)
+             }
+             return // 🛑 必须 return，防止进入下面的 JSON 解析
+          }
+
+          // 3. 处理文本 (JSON 信令)
+          if (typeof data === 'string') {
+            try {
+              // 简单的过滤：如果字符串看起来不像 JSON (比如不是 { 或 [ 开头)，直接忽略
+              const trimmed = data.trim()
+              if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+                  // console.warn('[WS] Received non-JSON string:', data)
+                  return
+              }
+              
+              const message: Message = JSON.parse(data)
+              this.emit('message', message)
+            } catch (error) {
+              // console.error('[WS] JSON Parse Error:', error)
+              // 忽略解析错误，不要抛出异常中断程序
+            }
           }
         }
         
@@ -144,19 +172,21 @@ export class WebSocketClient extends EventEmitter {
    */
   send(message: any): boolean {
     if (!this.isConnected()) {
-      console.warn('[WS] Not connected, cannot send message')
+      // console.warn('[WS] Not connected, cannot send message')
       return false
     }
     
     try {
-      const payload = typeof message === 'string' 
-        ? message 
-        : JSON.stringify(message)
-      
-      this.ws!.send(payload)
-      
-      if (this.config.debug) {
-        console.log('[WS] Sent:', message.type || 'message')
+      // ⚡️ [关键修改] 明确支持 ArrayBuffer 和 Uint8Array
+      if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
+        this.ws!.send(message)
+      } else {
+        // 文本消息：如果是对象则序列化，否则直接发送
+        const payload = typeof message === 'string' 
+          ? message 
+          : JSON.stringify(message)
+        
+        this.ws!.send(payload)
       }
       
       return true

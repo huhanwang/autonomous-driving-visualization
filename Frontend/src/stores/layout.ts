@@ -1,301 +1,259 @@
-// stores/layout.ts - 布局管理 Store
+// src/stores/layout.ts
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import type { LayoutConfig, ZoneConfig } from '@/types/layout'
-import { layoutPresets, defaultLayout } from '@/config/layoutPresets'
+import { reactive, watch } from 'vue'
+import type { IDELayoutConfig } from '@/types/layout-config'
 import { ElMessage } from 'element-plus'
 
-const LAYOUT_STORAGE_KEY = 'playback_layout_config'
-const LAYOUT_VERSION = 2 // 版本2：添加了info和settings面板
+const STORAGE_KEY = 'ide_layout_config_v1'
+const CURRENT_VERSION = 1
+
+const DEFAULT_LAYOUT: IDELayoutConfig = {
+  version: CURRENT_VERSION,
+  updatedAt: Date.now(),
+  sidebars: {
+    left: { isOpen: true, width: 300 },
+    right: { isOpen: true, width: 300 }
+  },
+  groups: {
+    data: {
+      id: 'data',
+      width: 40,
+      splitMode: 'tabs',
+      activePanelId: 'data',
+      panels: ['data', 'info', 'timeline']
+    },
+    vis: {
+      id: 'vis',
+      width: 60,
+      splitMode: 'tabs',
+      activePanelId: '2d',
+      panels: ['2d', '3d', 'images']
+    }
+  },
+  panelStates: {
+    'topicList': { id: 'topicList', visible: true, isFloating: false, isMaximized: false },
+    'objectManager': { id: 'objectManager', visible: true, isFloating: false, isMaximized: false },
+    'data': { id: 'data', visible: true, isFloating: false, isMaximized: false },
+    'info': { id: 'info', visible: true, isFloating: false, isMaximized: false },
+    'timeline': { id: 'timeline', visible: true, isFloating: false, isMaximized: false },
+    '2d': { id: '2d', visible: true, isFloating: false, isMaximized: false },
+    '3d': { id: '3d', visible: true, isFloating: false, isMaximized: false },
+    'images': { id: 'images', visible: true, isFloating: false, isMaximized: false }
+  },
+  // 🆕 初始化 Vis2D 配置
+  vis2d: {
+    coordinateMode: 'standard', // 默认标准系
+    showGrid: true,
+    showAxis: true
+  }
+}
 
 export const useLayoutStore = defineStore('layout', () => {
-  // ========== 状态 ==========
+  // ========== 1. 状态初始化 ==========
   
-  const currentLayout = ref<LayoutConfig>(loadLayoutFromStorage() || defaultLayout)
-  const currentPresetName = ref<string>('triple')
-  
-  // ========== 计算属性 ==========
-  
-  const zones = computed(() => currentLayout.value.zones)
-  
-  const visibleZones = computed(() => 
-    zones.value.filter(zone => zone.visible)
-  )
-  
-  const visibleZoneCount = computed(() => visibleZones.value.length)
-  
-  // ========== 方法 ==========
-  
-  /**
-   * 切换到预设布局
-   */
-  function switchToPreset(presetName: string) {
-    const preset = layoutPresets[presetName]
-    if (!preset) {
-      console.error(`Layout preset "${presetName}" not found`)
-      return false
-    }
-    
-    currentLayout.value = JSON.parse(JSON.stringify(preset))
-    currentPresetName.value = presetName
-    saveLayoutToStorage()
-    
-    ElMessage.success(`已切换到 ${preset.name} 布局`)
-    console.log('📐 Switched to layout:', presetName)
-    return true
-  }
-  
-  /**
-   * 更新分区宽度
-   */
-  function updateZoneWidth(zoneId: number, width: number) {
-    const zone = zones.value.find(z => z.id === zoneId)
-    if (zone) {
-      zone.width = Math.max(0, Math.min(100, width))
-      saveLayoutToStorage()
-      console.log(`📏 Zone ${zoneId} width updated to ${width}%`)
-    }
-  }
-  
-  /**
-   * 更新所有分区宽度（用于splitpanes的resize事件）
-   */
-  function updateAllZoneWidths(widths: number[]) {
-    const visibleZoneIds = visibleZones.value.map(z => z.id)
-    
-    widths.forEach((width, index) => {
-      if (index < visibleZoneIds.length) {
-        const zoneId = visibleZoneIds[index]
-        updateZoneWidth(zoneId, width)
+  // 尝试从 LocalStorage 加载，失败则使用默认配置的深拷贝
+  const state = reactive<IDELayoutConfig>(loadFromStorage() || JSON.parse(JSON.stringify(DEFAULT_LAYOUT)))
+
+  // ========== 2. 持久化逻辑 ==========
+
+  function loadFromStorage(): IDELayoutConfig | null {
+    try {
+      const json = localStorage.getItem(STORAGE_KEY)
+      if (json) {
+        const parsed = JSON.parse(json)
+        // 简单版本检查，如果版本不对则丢弃旧配置
+        if (parsed.version === CURRENT_VERSION) {
+          return parsed
+        }
+        console.warn('[Layout] Version mismatch, resetting to default.')
       }
-    })
+    } catch (e) {
+      console.error('[Layout] Failed to load config:', e)
+    }
+    return null
   }
+
+  // 简易防抖保存 (1秒内只保存一次)
+  let saveTimer: number | null = null
   
-  /**
-   * 切换分区可见性
-   */
-  function toggleZoneVisibility(zoneId: number) {
-    const zone = zones.value.find(z => z.id === zoneId)
-    if (zone) {
-      zone.visible = !zone.visible
+  function saveToStorage() {
+    if (saveTimer) clearTimeout(saveTimer)
+    
+    saveTimer = window.setTimeout(() => {
+      // 🛑 错误写法 (会导致死循环):
+      // state.updatedAt = Date.now() 
+      // localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+
+      // ✅ 正确写法:
+      // 1. 深拷贝当前状态 (断开与响应式 state 的关联)
+      const dataToSave = JSON.parse(JSON.stringify(state))
       
-      // 如果隐藏了分区，需要重新分配宽度
-      if (!zone.visible) {
-        redistributeWidths()
-      }
+      // 2. 修改副本的时间戳
+      dataToSave.updatedAt = Date.now()
       
-      saveLayoutToStorage()
-      console.log(`👁️ Zone ${zoneId} visibility: ${zone.visible}`)
-    }
+      // 3. 保存副本
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave))
+      
+      console.log('💾 Layout auto-saved')
+      saveTimer = null
+    }, 1000)
   }
-  
+
+  // 3. 监听状态变化，自动触发保存
+  watch(state, () => {
+    saveToStorage()
+  }, { deep: true })
+
+  // ========== 3. Actions (操作方法) ==========
+
   /**
-   * 重新分配可见分区的宽度（平均分配）
-   */
-  function redistributeWidths() {
-    const visible = visibleZones.value
-    if (visible.length === 0) return
-    
-    const averageWidth = 100 / visible.length
-    visible.forEach(zone => {
-      zone.width = averageWidth
-    })
-  }
-  
-  /**
-   * 切换分区的激活面板
-   */
-  function switchActivePanel(zoneId: number, panelId: string) {
-    const zone = zones.value.find(z => z.id === zoneId)
-    if (zone && zone.panels.includes(panelId)) {
-      zone.activePanelId = panelId
-      saveLayoutToStorage()
-      console.log(`🔄 Zone ${zoneId} active panel: ${panelId}`)
-    }
-  }
-  
-  /**
-   * 添加面板到分区
-   */
-  function addPanelToZone(zoneId: number, panelId: string) {
-    const zone = zones.value.find(z => z.id === zoneId)
-    if (!zone) return false
-    
-    // 检查面板是否已存在
-    if (zone.panels.includes(panelId)) {
-      ElMessage.warning('该面板已存在于此区域')
-      return false
-    }
-    
-    // 添加面板
-    zone.panels.push(panelId)
-    
-    // 如果是第一个面板，设为激活
-    if (zone.panels.length === 1) {
-      zone.activePanelId = panelId
-    }
-    
-    saveLayoutToStorage()
-    ElMessage.success('面板已添加')
-    console.log(`➕ Added panel ${panelId} to zone ${zoneId}`)
-    return true
-  }
-  
-  /**
-   * 从分区移除面板
-   */
-  function removePanelFromZone(zoneId: number, panelId: string) {
-    const zone = zones.value.find(z => z.id === zoneId)
-    if (!zone) return false
-    
-    const index = zone.panels.indexOf(panelId)
-    if (index === -1) return false
-    
-    // 移除面板
-    zone.panels.splice(index, 1)
-    
-    // 如果移除的是当前激活面板，切换到第一个面板
-    if (zone.activePanelId === panelId && zone.panels.length > 0) {
-      zone.activePanelId = zone.panels[0]
-    } else if (zone.panels.length === 0) {
-      zone.activePanelId = ''
-    }
-    
-    saveLayoutToStorage()
-    ElMessage.success('面板已移除')
-    console.log(`➖ Removed panel ${panelId} from zone ${zoneId}`)
-    return true
-  }
-  
-  /**
-   * 移动面板到另一个分区
-   */
-  function movePanelToZone(
-    fromZoneId: number, 
-    toZoneId: number, 
-    panelId: string
-  ) {
-    if (fromZoneId === toZoneId) return false
-    
-    // 从源分区移除
-    const removed = removePanelFromZone(fromZoneId, panelId)
-    if (!removed) return false
-    
-    // 添加到目标分区
-    return addPanelToZone(toZoneId, panelId)
-  }
-  
-  /**
-   * 重置为默认布局
+   * 重置布局为默认状态
    */
   function resetLayout() {
-    currentLayout.value = JSON.parse(JSON.stringify(defaultLayout))
-    currentPresetName.value = 'triple'
-    saveLayoutToStorage()
-    ElMessage.success('已重置为默认布局')
-    console.log('🔄 Layout reset to default')
+    Object.assign(state, JSON.parse(JSON.stringify(DEFAULT_LAYOUT)))
+    // 强制立即保存
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    ElMessage.success('布局已恢复默认')
   }
-  
+
   /**
-   * 保存当前布局到 localStorage
+   * 切换侧边栏折叠/展开
    */
-  function saveLayoutToStorage() {
-    try {
-      const data = {
-        version: LAYOUT_VERSION,
-        layout: currentLayout.value,
-        presetName: currentPresetName.value,
-        timestamp: Date.now()
-      }
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(data))
-      console.log('💾 Layout saved to storage (version', LAYOUT_VERSION, ')')
-    } catch (error) {
-      console.error('Failed to save layout:', error)
+  function toggleSidebar(side: 'left' | 'right') {
+    state.sidebars[side].isOpen = !state.sidebars[side].isOpen
+  }
+
+  /**
+   * 设置分组当前激活的面板 (Tab切换)
+   */
+  function setGroupActivePanel(groupId: 'data' | 'vis', panelId: string) {
+    if (state.groups[groupId].panels.includes(panelId)) {
+      state.groups[groupId].activePanelId = panelId
     }
   }
-  
+
   /**
-   * 从 localStorage 加载布局
+   * 切换分组显示模式 (Tabs vs Grid)
    */
-  function loadLayoutFromStorage(): LayoutConfig | null {
-    try {
-      const stored = localStorage.getItem(LAYOUT_STORAGE_KEY)
-      if (!stored) return null
-      
-      const data = JSON.parse(stored)
-      
-      // 检查版本号
-      if (!data.version || data.version < LAYOUT_VERSION) {
-        console.warn(`⚠️ 检测到旧版本布局 (v${data.version || 1})，将使用默认布局 (v${LAYOUT_VERSION})`)
-        // 清除旧的存储
-        localStorage.removeItem(LAYOUT_STORAGE_KEY)
-        return null
-      }
-      
-      const layout = data.layout as LayoutConfig
-      
-      console.log(`📂 Layout loaded from storage (v${data.version})`)
-      return layout
-    } catch (error) {
-      console.error('Failed to load layout:', error)
-      return null
+  function setGroupSplitMode(groupId: 'data' | 'vis', mode: 'tabs' | 'grid') {
+    state.groups[groupId].splitMode = mode
+  }
+
+  /**
+   * 更新分组宽度 (Splitpanes回调)
+   */
+  function updateGroupSizes(sizes: number[]) {
+    // splitpanes 返回的是数组 [size1, size2, ...]
+    if (sizes.length >= 2) {
+      state.groups.data.width = sizes[0]
+      state.groups.vis.width = sizes[1]
     }
   }
-  
+
   /**
-   * 导出布局配置
+   * 切换面板最大化状态 (互斥)
    */
-  function exportLayout(): string {
-    return JSON.stringify(currentLayout.value, null, 2)
-  }
-  
-  /**
-   * 导入布局配置
-   */
-  function importLayout(jsonString: string): boolean {
-    try {
-      const layout = JSON.parse(jsonString) as LayoutConfig
-      
-      // 简单验证
-      if (!layout.zones || layout.zones.length !== 3) {
-        throw new Error('Invalid layout format')
+  function togglePanelMaximize(panelId: string) {
+    const pState = state.panelStates[panelId]
+    if (pState) {
+      // 如果当前不是最大化，则先把其他所有面板的最大化取消
+      if (!pState.isMaximized) {
+        Object.values(state.panelStates).forEach(s => s.isMaximized = false)
       }
+      pState.isMaximized = !pState.isMaximized
       
-      currentLayout.value = layout
-      currentPresetName.value = 'custom'
-      saveLayoutToStorage()
-      
-      ElMessage.success('布局已导入')
-      console.log('📥 Layout imported')
-      return true
-    } catch (error) {
-      console.error('Failed to import layout:', error)
-      ElMessage.error('导入失败: 无效的布局配置')
-      return false
+      // 如果最大化了，取消浮动状态
+      if (pState.isMaximized) {
+        pState.isFloating = false
+      }
     }
   }
-  
+
+  // ========== 4. 导入/导出功能 ==========
+
+  function exportConfigToFile() {
+    const dataStr = JSON.stringify(state, null, 2)
+    const blob = new Blob([dataStr], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ide-layout-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('配置已导出')
+  }
+
+  function importConfigFromFile(file: File) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const json = e.target?.result as string
+        const config = JSON.parse(json)
+        
+        // 简单的结构校验
+        if (config.version && config.groups && config.panelStates) {
+          Object.assign(state, config)
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) // 立即保存
+          ElMessage.success('布局配置已导入')
+        } else {
+          throw new Error('Invalid format')
+        }
+      } catch (err) {
+        console.error(err)
+        ElMessage.error('导入失败：文件格式不正确')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  /**
+   * 更新侧边栏宽度
+   */
+  function updateSidebarWidth(side: 'left' | 'right', width: number) {
+    // 限制最小/最大宽度
+    const newWidth = Math.max(150, Math.min(800, width))
+    state.sidebars[side].width = newWidth
+  }
+
+  /**
+   * 🆕 设置面板的最大化状态 (用于浮动窗口)
+   */
+  function setPanelMaximized(panelId: string, isMaximized: boolean) {
+    if (state.panelStates[panelId]) {
+      state.panelStates[panelId].isMaximized = isMaximized
+    }
+  }
+
+  /**
+   * 切换面板浮动状态
+   */
+  function togglePanelFloating(panelId: string) {
+    const pState = state.panelStates[panelId]
+    if (pState) {
+      pState.isFloating = !pState.isFloating
+      
+      // 如果切回组内（不再浮动），强制取消最大化，否则界面会乱
+      if (!pState.isFloating) {
+        pState.isMaximized = false
+      }
+    }
+  }
+
   return {
-    // 状态
-    currentLayout,
-    currentPresetName,
-    zones,
-    visibleZones,
-    visibleZoneCount,
-    
-    // 方法
-    switchToPreset,
-    updateZoneWidth,
-    updateAllZoneWidths,
-    toggleZoneVisibility,
-    switchActivePanel,
-    addPanelToZone,
-    removePanelFromZone,
-    movePanelToZone,
+    state,
     resetLayout,
-    saveLayoutToStorage,
-    exportLayout,
-    importLayout
+    toggleSidebar,
+    setGroupActivePanel,
+    setGroupSplitMode,
+    updateGroupSizes,
+    setPanelMaximized,
+    togglePanelFloating,
+    togglePanelMaximize,
+    exportConfigToFile,
+    importConfigFromFile,
+    updateSidebarWidth
   }
 })
