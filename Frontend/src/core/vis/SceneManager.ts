@@ -1,15 +1,12 @@
 // src/core/vis/SceneManager.ts
 
 import { EventEmitter } from '@/core/EventEmitter'
-import { VizDecoder, type DecodedObject } from '../protocol/VizDecoder'
+import { VizDecoder } from '../protocol/VizDecoder'
 import { layerManager } from './LayerManager'
 
 export class SceneManager extends EventEmitter {
   private static instance: SceneManager
   
-  // 🗑️ 移除：private objects: Map<string, DecodedObject> = new Map()
-  // 我们不再在 SceneManager 里存全量状态，交给 LayerManager 管理
-
   private constructor() { super() }
 
   static getInstance() {
@@ -19,12 +16,11 @@ export class SceneManager extends EventEmitter {
 
   handleBinaryMessage(buffer: ArrayBuffer) {
     try {
-      const newObjects = VizDecoder.decode(buffer)
+      // 1. 解析数据 (返回 { layers, coordinateSystem })
+      const result = VizDecoder.decode(buffer)
       
-      // 🗑️ 移除：this.objects.clear() ...
-      
-      // ✅ 直接将增量/全量数据喂给 LayerManager，由它处理“按 Group 更新”逻辑
-      layerManager.updateScene(newObjects)
+      // 2. 更新场景 (传入包含坐标系的完整结果)
+      layerManager.updateScene(result)
       
       this.emit('scene-updated')
       
@@ -33,8 +29,7 @@ export class SceneManager extends EventEmitter {
     }
   }
 
-  getAllObjects(): DecodedObject[] {
-    // ✅ 统一从 LayerManager 获取渲染对象
+  getAllObjects() {
     return layerManager.getRenderableObjects()
   }
 }

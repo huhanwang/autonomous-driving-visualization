@@ -123,6 +123,7 @@ function getPanelComponent(id: string) {
   border: 1px solid #dcdfe6;
   border-radius: 4px;
   overflow: hidden;
+  min-width: 0;
 }
 .group-toolbar {
   padding: 4px 8px;
@@ -137,6 +138,8 @@ function getPanelComponent(id: string) {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 .main-tabs {
   height: 100%;

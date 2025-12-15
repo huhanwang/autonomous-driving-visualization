@@ -46,7 +46,7 @@
               <PanelGroup groupId="data" :selectedTopic="selectedTopic" />
             </div>
           </Pane>
-  
+
           <Pane :size="layout.state.groups.vis.width" :min-size="10">
             <div class="group-container">
               <PanelGroup groupId="vis" :selectedTopic="selectedTopic" />
@@ -349,6 +349,11 @@
     width: 100%;
     height: 100%;
     padding: 0 2px;
+    /* 🌟 [关键修复] 添加以下三行 */
+    overflow: hidden;      /* 强制裁剪溢出内容 */
+    display: flex;         /* 使用 Flex 布局 */
+    flex-direction: column;
+    min-width: 0;          /* 允许 Flex 子项缩小到 0，忽略内容最小宽度 */
   }
   
   /* ========== Drag Overlay ========== */
