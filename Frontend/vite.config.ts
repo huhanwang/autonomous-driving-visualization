@@ -41,7 +41,7 @@ export default defineConfig(({ mode }) => {
     // 👇 新增/修改 Build 配置 👇
     build: {
       // 1. 设置输出路径: 从 Frontend 跳出到 Backend/3rdparty/dist
-      outDir: '../Backend/3rdparty/dist',
+      outDir: '../Backend/build/bin/dist',
 
       // 2. 允许清空输出目录 (因为该目录在项目根目录 Frontend 之外，必须显式开启)
       emptyOutDir: true,

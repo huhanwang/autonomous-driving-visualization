@@ -120,6 +120,7 @@ onUnmounted(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .toolbar {
@@ -143,6 +144,8 @@ canvas {
   flex: 1;
   display: block;
   cursor: crosshair;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .status-bar {

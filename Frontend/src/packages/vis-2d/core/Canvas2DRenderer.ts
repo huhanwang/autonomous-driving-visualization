@@ -105,10 +105,17 @@ export class Canvas2DRenderer {
     this.height = height
     this.dpr = window.devicePixelRatio || 1
     
+    // ✅ 1. 只设置画布的“分辨率”属性 (Attribute)
     this.ctx.canvas.width = width * this.dpr
     this.ctx.canvas.height = height * this.dpr
-    this.ctx.canvas.style.width = `${width}px`
-    this.ctx.canvas.style.height = `${height}px`
+    
+    // ❌ 2. 【删除或注释掉】这两行设置样式的代码
+    // CSS 会负责处理显示大小，不要在这里用 JS 强制写死，否则会跟 Flexbox 冲突
+    // this.ctx.canvas.style.width = `${width}px` 
+    // this.ctx.canvas.style.height = `${height}px`
+    
+    // 💡 补充：如果你的绘制逻辑依赖 scale，可能需要根据 dpr 调整，
+    // 但你下方的 render 方法里已经处理了 dpr (ctx.scale(s, s))，所以这里不需要额外操作。
   }
 
   /**
