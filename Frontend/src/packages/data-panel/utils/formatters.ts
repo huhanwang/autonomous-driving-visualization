@@ -32,6 +32,11 @@ export const ValueFormatters = {
   
   object: () => '{...}',
   
+  // ⬇️ 新增 enum 格式化器
+  enum: (value: any) => {
+    return String(value)
+  },
+
   null: () => 'null'
 }
 
@@ -47,6 +52,11 @@ export function formatFieldValue(value: any, field?: TopicField): string {
     return ValueFormatters.bytes(value)
   }
   
+  // ⬇️ 新增：优先处理 enum 类型
+  if (field?.type === 'enum') {
+    return ValueFormatters.enum(value)
+  }
+
   if (Array.isArray(value)) {
     return ValueFormatters.array(value)
   }

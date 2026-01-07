@@ -4,8 +4,7 @@ import { schemaManager, type TreeTemplateNode } from './SchemaManager'
 import { EventEmitter } from '@/core/EventEmitter'
 import type { TopicData } from '@/types/topic'
 
-// 🌟 1. 引入驱动 (通过 Vite 别名动态指向当前驱动入口)
-import { packDriver as driver } from '@/driver'
+import { schemaDriver as driver } from '@/driver'
 
 // 🌟 2. 引入 UI 格式化工具 (仅保留格式化逻辑)
 import { getValueIcon, getValueType, formatFieldValue } from '@/packages/data-panel/utils/formatters'
@@ -190,11 +189,15 @@ export class DataManager extends EventEmitter {
   private createTreeNode(name: string, value: any, path: string, templateNode?: TreeTemplateNode): RenderedTreeNode {
     const hasData = value !== undefined && value !== null
     return {
-      id: path, name, path,
+      id: path, 
+      name, 
+      path,
       type: templateNode?.type || getValueType(value),
       repeated: templateNode?.repeated || Array.isArray(value),
-      icon: getValueIcon(value),
-      hasData, value,
+      // ⬇️ 修改处：优先使用 Schema 定义的图标（如 enum 的 🏷️），没有才根据值推断
+      icon: templateNode?.icon || getValueIcon(value), 
+      hasData, 
+      value,
       formattedValue: hasData ? formatFieldValue(value, { type: templateNode?.type } as any) : 'null'
     }
   }

@@ -1,8 +1,9 @@
 // Frontend/src/composables/useDataStream.ts - 通用数据流订阅 Hook
 
 import { shallowRef, onMounted, onUnmounted, watch, type ShallowRef } from 'vue'
+// ✅ [修改] 引用核心层的 DataManager，而不是 Package 层的空壳
+import { dataManager } from '@/core/data/DataManager' 
 import { dataBus } from '@/core/DataBus'
-import { dataManager } from '@/packages/data-panel/managers/DataManager'
 
 /**
  * 通用数据流订阅 Hook
@@ -43,12 +44,9 @@ export function useDataStream<T = any>(
     }
 
     // 3. 建立新订阅
-    // 注意：这里订阅的是 DataBus 的事件，payload 应该是处理后的数据
-    // 如果 DataBus 还是分发原始消息，这里可能需要适配
-    // 假设 DataManager 或 DataBus 已经发出了更新信号
-    
-    // 方案 A: 监听 DataManager 的轻量级事件，然后主动拉取 (Pull Mode - 推荐)
+    // 监听 DataManager 的数据更新事件
     const handler = (event: any) => {
+      // ✅ 确保这里判断的是 key
       if (event.topicKey === key) {
         const latest = dataManager.getParsedData(key)
         if (latest) {
@@ -57,6 +55,7 @@ export function useDataStream<T = any>(
       }
     }
     
+    // ✅ dataManager 现在指向 Core 实例，可以收到数据
     dataManager.on('data-updated', handler)
     unsubscribe = () => dataManager.off('data-updated', handler)
   }

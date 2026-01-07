@@ -232,6 +232,7 @@ function getNodeIcon(node: FlatTreeNode) {
 function getNodeIconClass(node: FlatTreeNode): string {
   if (node.hasChildren) return 'icon-object'
   const type = node.type?.toLowerCase() || ''
+  if (type === 'enum') return 'icon-enum'
   if (type.includes('int') || type.includes('float') || type.includes('double') || type === 'number') return 'icon-number'
   if (type === 'string') return 'icon-string'
   if (type === 'boolean' || type === 'bool') return 'icon-boolean'
@@ -242,6 +243,12 @@ function getNodeIconClass(node: FlatTreeNode): string {
 function getTypeDisplay(type: string): string {
   const typeMap: Record<string, string> = {
     'int32': 'i32', 'int64': 'i64', 'uint32': 'u32', 'uint64': 'u64',
+    // ⬇️ 新增映射
+    'sint32': 'si32', 'sint64': 'si64',
+    'fixed32': 'fix32', 'fixed64': 'fix64',
+    'sfixed32': 'sfix32', 'sfixed64': 'sfix64',
+    'message': 'msg', 'enum': 'enum', 
+    // ⬆️
     'float': 'f32', 'double': 'f64', 'string': 'str', 'boolean': 'bool',
     'bytes': 'byte[]', 'array': '[]', 'object': '{}', 'null': '∅'
   }

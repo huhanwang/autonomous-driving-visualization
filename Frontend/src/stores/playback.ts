@@ -211,8 +211,49 @@ export const usePlaybackStore = defineStore('playback', () => {
   
   // ========== 订阅方法 ==========
   
-  function subscribeTopic(topicKey: string) {
-    return sendCommand('SUBSCRIBE_TOPIC', { topic_key: topicKey })
+  /**
+   * 订阅 Topic (增强版)
+   * 修复：订阅后立即主动拉取 Schema 和 Data，确保暂停状态下也能立即看到数据
+   */
+  async function subscribeTopic(topicKey: string) {
+    // 1. 发送订阅命令
+    const sent = sendCommand('SUBSCRIBE_TOPIC', { topic_key: topicKey })
+    
+    if (sent) {
+      // 2. 立即主动拉取数据（不等待下一个 tick，解决暂停时不更新的问题）
+      const topics = useTopicsStore()
+      
+      try {
+        // [A] 确保 Schema 存在
+        if (!topics.getSchema(topicKey)) {
+          console.log(`🔍 [AutoFetch] Fetching schema for ${topicKey}...`)
+          const schema = await requestTopicSchema(topicKey)
+          if (schema) {
+            // 手动触发 Store 更新，防止 request 吞掉消息导致 Store 没更新
+            topics.handleTopicSchemaResponse({ topic_key: topicKey, schema })
+          }
+        }
+
+        // [B] 无论是否播放，都拉取一次当前帧数据
+        console.log(`🔍 [AutoFetch] Fetching initial data for ${topicKey}...`)
+        const response = await requestTopicData(topicKey)
+        
+        if (response && response.data !== null) {
+          // 手动触发 Store 更新
+          topics.handleTopicDataResponse({
+            topic_key: topicKey,
+            frame_id: response.frame_id,
+            timestamp: response.timestamp,
+            data: response.data
+          })
+          console.log(`✅ [AutoFetch] Initial data loaded for ${topicKey}`)
+        }
+      } catch (error) {
+        console.warn('⚠️ [AutoFetch] Failed to fetch initial data:', error)
+      }
+    }
+    
+    return sent
   }
   
   function getAvailableTopics() {
