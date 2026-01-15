@@ -2,15 +2,7 @@
 
 import { PointListDecoder, type DecodedPointList } from './PointListDecoder'
 
-// 🌟 [新增] 视图掩码枚举 (必须与后端一致)
-export enum ViewMask {
-  NONE    = 0,
-  VIEW_2D = 1 << 0, // 1
-  VIEW_3D = 1 << 1, // 2
-  ALL     = 3       // 1 | 2
-}
-
-// 坐标系枚举
+// 坐标系枚举 (对应 C++ CoordinateSystem)
 export enum CoordinateSystem {
   RIGHT_HANDED_Z_UP_X_FWD = 0,   // ROS (X前, Y左, Z上)
   RIGHT_HANDED_Y_UP_X_RIGHT = 1, // OpenGL (X右, Y上, Z后)
@@ -23,20 +15,21 @@ export enum NodeType {
   OBJECT = 1
 }
 
+// 🌟 [核心修正] 对象类型枚举 (必须与 C++ scene_graph.h 严格一致)
 export enum ObjectType {
-  UNKNOWN = 0,
+  UNKNOWN     = 0,
   POINT_CLOUD = 1,
-  LINE_LIST = 2,
-  POLYLINE = 3,
-  POLYGON = 4,
-  CUBE = 5,
-  SPHERE = 6,
-  TEXT = 7,
-  MESH = 8,
-  IMAGE = 9
+  LINE_LIST   = 2,
+  POLYLINE    = 3, // C++: 3 (车道线)
+  POLYGON     = 4, // C++: 4 (区域/多边形)
+  CUBE        = 5, // C++: 5 (通用物体/立方体)
+  SPHERE      = 6, // C++: 6 (点/球体)
+  TEXT        = 7,
+  MESH        = 8, // C++: 8 (模型)
+  IMAGE       = 9
 }
 
-// 🌟 [新增] 子类型枚举 (与后端保持一致)
+// 🌟 [核心修正] 子类型枚举 (必须与 C++ scene_graph.h 严格一致)
 export enum SubType {
   // === 0-99: 车道线/路面标识 ===
   DEFAULT = 0,
@@ -65,7 +58,19 @@ export enum SubType {
   OBJ_CYCLIST = 102,
   OBJ_CONE = 103,
   OBJ_TRUCK = 104,
-  OBJ_BUS = 105
+  OBJ_BUS = 105,
+  
+  // Traffic Elements
+  TRAFFIC_LIGHT = 50,
+  TRAFFIC_SIGN = 51
+}
+
+// 视图掩码
+export enum ViewMask {
+  NONE    = 0,
+  VIEW_2D = 1 << 0, // 1
+  VIEW_3D = 1 << 1, // 2
+  ALL     = 3       // 1 | 2
 }
 
 // 解码结果接口
@@ -81,7 +86,7 @@ export interface DecodedNodeBase {
   id: string
   name: string
   visible: boolean
-  viewMask: number // 🌟 [修复] 包含 viewMask
+  viewMask: number
   properties: Record<string, string>
 }
 
@@ -154,7 +159,7 @@ export class VizDecoder {
       return new TextDecoder().decode(strBytes)
     }
 
-    // 🌟 [修复] 读取节点基础信息 (包含 viewMask)
+    // 读取节点基础信息 (Node::serialize)
     const readNodeBase = () => {
       const id = readString()
       const name = readString()
@@ -163,7 +168,7 @@ export class VizDecoder {
       checkBound(4) 
       
       const visible = view.getUint8(offset++) !== 0
-      const viewMask = view.getUint8(offset++) // 🌟 读取掩码
+      const viewMask = view.getUint8(offset++) // 读取 ViewMask
       
       const propCount = view.getUint16(offset, true); offset += 2
       
@@ -178,9 +183,11 @@ export class VizDecoder {
     }
 
     const decodeNode = (typeTag: NodeType): DecodedGroup | DecodedObject => {
+      // 1. 读取基类 Node 部分
       const base = readNodeBase()
 
       if (typeTag === NodeType.GROUP) {
+        // Group::serialize
         checkBound(4)
         const childCount = view.getUint32(offset, true); offset += 4
         const children: any[] = []
@@ -194,15 +201,11 @@ export class VizDecoder {
         return { nodeType: 'group', ...base, children }
       } 
       else {
-        // OBJECT
-        // Type(1) + SubType(4) + Pos(12) + Rot(12) + Size(12) + Color(4)
+        // Object::serialize
+        // C++ 顺序: Node -> Type(1) -> SubType(4) -> Pos(12) -> Rot(12) -> Size(12) -> Color(4) -> Geometry
         checkBound(1 + 4 + 12 + 12 + 12 + 4)
         
         const type = view.getUint8(offset++) as ObjectType
-        
-        // 🛑 注意：viewMask 已经在 base 里读过了，这里不需要再读
-        // 后端顺序: Node::serialize (viewMask) -> Object Specifics (Type, SubType...)
-
         const subType = view.getInt32(offset, true) as SubType; offset += 4
         
         const pos = { x: view.getFloat32(offset, true), y: view.getFloat32(offset+4, true), z: view.getFloat32(offset+8, true) }; offset += 12
@@ -210,7 +213,7 @@ export class VizDecoder {
         const size = { x: view.getFloat32(offset, true), y: view.getFloat32(offset+4, true), z: view.getFloat32(offset+8, true) }; offset += 12
         const color = { r: view.getUint8(offset++), g: view.getUint8(offset++), b: view.getUint8(offset++), a: view.getUint8(offset++) }
 
-        // 解析几何数据
+        // 解析几何数据 (CompressedPointList)
         let points
         try {
             if (offset + 4 <= view.byteLength) {
@@ -224,8 +227,6 @@ export class VizDecoder {
             console.warn('[VizDecoder] PointList decode skipped', e)
             throw e
         }
-
-        // ✅ 不再读取 binary_data
 
         return { 
             nodeType: 'object', ...base, 

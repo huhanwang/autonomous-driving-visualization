@@ -6,7 +6,7 @@ import type { TopicData } from '@/types/topic'
 
 import { schemaDriver as driver } from '@/driver'
 
-// 🌟 2. 引入 UI 格式化工具 (仅保留格式化逻辑)
+// 🌟 引入 UI 格式化工具
 import { getValueIcon, getValueType, formatFieldValue } from '@/packages/data-panel/utils/formatters'
 
 export interface RenderedTreeNode extends TreeTemplateNode {
@@ -43,13 +43,21 @@ export class DataManager extends EventEmitter {
   private renderedTrees: Map<string, RenderedTreeNode[]> = new Map()
   private treeCache: Map<string, CacheEntry> = new Map()
   
-  // 🌟 3. Schema 同步状态记录 (关键修复：确保这里初始化)
+  // Schema 同步状态记录
   private syncedSchemas: Set<string> = new Set()
+
+  // 🌟 [新增] UI 更新节流 (TopicKey -> Timestamp)
+  private lastUiUpdate: Record<string, number> = {}
+  private readonly UI_UPDATE_INTERVAL = 100; // UI 面板限制最高 10 FPS
+  
+  // 🌟 [新增] 环形缓冲区: 缓存最近收到的 60 帧数据
+  private frameBuffer: Map<string, ParsedData[]> = new Map()
+  private readonly BUFFER_SIZE = 60 
   
   private constructor() {
     super()
     
-    // 初始化 Worker (使用驱动工厂创建)
+    // 初始化 Worker
     console.log(`[DataManager] Initializing with driver: ${driver.name}`)
     this.worker = driver.createWorker()
     
@@ -71,7 +79,6 @@ export class DataManager extends EventEmitter {
       if (success && parsedData) {
         this.handleWorkerResult(topicKey, parsedData)
       } else if (error) {
-        // 降低日志级别，防止刷屏
         if (Math.random() < 0.01) { 
           console.error(`[DataManager] Worker error for ${topicKey}:`, error)
         }
@@ -79,27 +86,49 @@ export class DataManager extends EventEmitter {
     }
   }
 
+  // 🌟 核心修改：只更新状态，不主动推送到 3D 渲染层
   private handleWorkerResult(topicKey: string, result: ParsedData) {
+    // 1. 更新最新快照 (Atomic Update)
     this.parsedData.set(topicKey, result)
     
-    // 构建渲染树 (目前仍在主线程，因为涉及 UI 图标)
+    // 2. 🌟 存入缓冲区 (Buffer)
+    if (!this.frameBuffer.has(topicKey)) {
+      this.frameBuffer.set(topicKey, [])
+    }
+    const buffer = this.frameBuffer.get(topicKey)!
+    buffer.push(result)
+    
+    // 保持缓冲区大小 (FIFO)
+    if (buffer.length > this.BUFFER_SIZE) {
+      buffer.shift()
+    }
+
+    // 3. 构建渲染树 (UI 面板专用)
     const rendered = this.buildRenderedTree(topicKey, result)
     if (rendered) {
       this.renderedTrees.set(topicKey, rendered)
     }
     
-    // 发送轻量级通知
+    // 4. 通知 UI 面板 (Vue)，但必须节流
+    this.notifyUiThrottled(topicKey)
+  }
+  
+  private notifyUiThrottled(topicKey: string) {
+    const now = Date.now()
+    const last = this.lastUiUpdate[topicKey] || 0
     const raw = this.rawData.get(topicKey)
-    if (raw) {
+    
+    if (raw && (now - last > this.UI_UPDATE_INTERVAL)) {
       this.emit('data-updated', {
         topicKey,
         frameId: raw.frame_id,
         timestamp: raw.timestamp
       } as DataUpdateEvent)
+      
+      this.lastUiUpdate[topicKey] = now
     }
   }
   
-  // 🌟 4. 优化后的 updateData (带 Schema 缓存检查)
   updateData(topicKey: string, data: TopicData): void {
     this.rawData.set(topicKey, data)
     
@@ -115,9 +144,9 @@ export class DataManager extends EventEmitter {
       this.syncedSchemas.add(topicKey)
     }
     
-    // 步骤 B: 发送纯数据进行解析 (不带 Schema，减少开销)
+    // 步骤 B: 发送纯数据进行解析
     this.worker.postMessage({
-      type: 'PARSE', // 对应 Worker 里的 PARSE 指令
+      type: 'PARSE', 
       payload: {
         topicKey,
         data: data.data
@@ -126,6 +155,11 @@ export class DataManager extends EventEmitter {
   }
   
   // ========== 数据访问接口 (Pull Mode) ==========
+  
+  // 🌟 [新增] 获取最新解析数据 (供 SceneManager 主动调用)
+  getLatestData(topicKey: string): ParsedData | undefined {
+    return this.parsedData.get(topicKey)
+  }
   
   getRenderedTree(topicKey: string): RenderedTreeNode[] | undefined {
     return this.renderedTrees.get(topicKey)
@@ -150,7 +184,9 @@ export class DataManager extends EventEmitter {
     this.parsedData.delete(topicKey)
     this.renderedTrees.delete(topicKey)
     this.treeCache.delete(topicKey)
-    this.syncedSchemas.delete(topicKey) // 清除同步状态
+    this.syncedSchemas.delete(topicKey) 
+    this.frameBuffer.delete(topicKey)
+    delete this.lastUiUpdate[topicKey]
   }
   
   clear(): void {
@@ -158,7 +194,9 @@ export class DataManager extends EventEmitter {
     this.parsedData.clear()
     this.renderedTrees.clear()
     this.treeCache.clear()
-    this.syncedSchemas.clear() // 清除同步状态
+    this.syncedSchemas.clear()
+    this.frameBuffer.clear()
+    this.lastUiUpdate = {}
     this.removeAllListeners()
   }
 
@@ -168,12 +206,10 @@ export class DataManager extends EventEmitter {
     const template = schemaManager.getTemplate(topicKey)
     if (!template) return null
     
-    // ⚡️ 修复：使用 frame_id 作为指纹，移除 JSON.stringify
     const raw = this.rawData.get(topicKey)
     const uniqueKey = raw ? `${raw.frame_id}` : null
     
     const cached = this.treeCache.get(topicKey)
-    // 如果帧号没变，直接复用上一次的树对象，Vue 渲染直接跳过
     if (uniqueKey && cached && cached.dataHash === uniqueKey) {
       return cached.tree
     }
@@ -194,7 +230,6 @@ export class DataManager extends EventEmitter {
       path,
       type: templateNode?.type || getValueType(value),
       repeated: templateNode?.repeated || Array.isArray(value),
-      // ⬇️ 修改处：优先使用 Schema 定义的图标（如 enum 的 🏷️），没有才根据值推断
       icon: templateNode?.icon || getValueIcon(value), 
       hasData, 
       value,
@@ -212,7 +247,7 @@ export class DataManager extends EventEmitter {
       if (value !== undefined && value !== null) {
         if (Array.isArray(value)) {
           node.formattedValue = `[${value.length} items]`
-          if (value.length < 500) { // 限制数组显示数量，防止 DOM 爆炸
+          if (value.length < 500) { 
              node.children = this.buildArrayChildren(value, templateNode, currentPath)
           }
         } else if (typeof value === 'object') {

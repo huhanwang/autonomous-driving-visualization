@@ -1,4 +1,4 @@
-// core/WebSocketClient.ts - WebSocket客户端封装
+// src/core/WebSocketClient.ts - WebSocket客户端封装 (二元结构优化版)
 
 import { EventEmitter } from './EventEmitter'
 import type { Message } from './types/message'
@@ -14,20 +14,12 @@ export interface WebSocketClientConfig {
 }
 
 /**
- * WebSocket客户端
- * 
- * 职责：
- * 1. 管理WebSocket连接
- * 2. 自动重连
- * 3. 心跳保活
- * 4. 消息收发
- * 
- * 事件：
- * - 'connected': 连接成功
- * - 'disconnected': 连接断开
- * - 'message': 收到消息
- * - 'error': 发生错误
+ * 消息队列项 (仅用于非紧急的大型文本数据)
  */
+interface QueueItem {
+  data: any
+}
+
 export class WebSocketClient extends EventEmitter {
   private ws: WebSocket | null = null
   private url: string = ''
@@ -36,6 +28,13 @@ export class WebSocketClient extends EventEmitter {
   private reconnectTimer: number | null = null
   private heartbeatTimer: number | null = null
   private isManualClose: boolean = false
+  
+  // 仅用于处理非关键文本消息的队列
+  private messageQueue: QueueItem[] = []
+  private isProcessingQueue: boolean = false
+  
+  // 文本处理时间预算 (ms)
+  private readonly FRAME_BUDGET_MS = 4 
   
   constructor(config: WebSocketClientConfig = {}) {
     super()
@@ -49,9 +48,6 @@ export class WebSocketClient extends EventEmitter {
     }
   }
   
-  /**
-   * 连接WebSocket服务器
-   */
   async connect(url: string): Promise<void> {
     if (this.ws?.readyState === WebSocket.OPEN) {
       console.warn('[WS] Already connected')
@@ -71,24 +67,18 @@ export class WebSocketClient extends EventEmitter {
         this.ws.binaryType = 'arraybuffer'
         
         this.ws.onopen = () => {
-          if (this.config.debug) {
-            console.log('[WS] Connected')
-          }
-          
+          if (this.config.debug) console.log('[WS] Connected')
           this.emit('connected', { url })
           this.startHeartbeat()
           resolve()
         }
         
         this.ws.onclose = (event) => {
-          if (this.config.debug) {
-            console.log('[WS] Disconnected:', event.code, event.reason)
-          }
-          
+          if (this.config.debug) console.log('[WS] Disconnected:', event.code)
           this.emit('disconnected', { code: event.code, reason: event.reason })
           this.stopHeartbeat()
+          this.messageQueue = []
           
-          // 自动重连
           if (!this.isManualClose && this.config.reconnect) {
             this.scheduleReconnect()
           }
@@ -100,44 +90,40 @@ export class WebSocketClient extends EventEmitter {
           reject(error)
         }
         
-        this.ws.onmessage = async (event) => { // 🌟 改为 async 以支持 Blob.arrayBuffer()
+        // 🌟 [核心优化] 二元分流处理
+        this.ws.onmessage = async (event) => {
           const data = event.data
 
-          // 1. 处理 ArrayBuffer (正常情况)
+          // ===============================
+          // 通道 1: 展示数据 (Binary) - 直通车
+          // ===============================
           if (data instanceof ArrayBuffer) {
-            // console.log('[WS] binary:', data)
+            // 立即分发，不排队，不阻塞。
+            // 目标是尽快让 DataBus 拿到数据并扔给 Worker。
+            // 积压控制交由渲染层的 SceneManager 处理（丢帧策略）。
             this.emit('binary', data)
             return
           }
           
-          // 2. 处理 Blob (异常情况：binaryType 设置失效)
-          // 这是一个兜底逻辑，防止应用崩溃
           if (data instanceof Blob) {
-             // console.warn('[WS] Received Blob instead of ArrayBuffer. Converting...')
              try {
                  const buffer = await data.arrayBuffer()
                  this.emit('binary', buffer)
-             } catch (e) {
-                 console.error('[WS] Failed to convert Blob:', e)
-             }
-             return // 🛑 必须 return，防止进入下面的 JSON 解析
+             } catch (e) { console.error(e) }
+             return
           }
 
-          // 3. 处理文本 (JSON 信令)
+          // ===============================
+          // 通道 2: 指令/文本数据 - 优先处理
+          // ===============================
           if (typeof data === 'string') {
-            try {
-              // 简单的过滤：如果字符串看起来不像 JSON (比如不是 { 或 [ 开头)，直接忽略
-              const trimmed = data.trim()
-              if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-                  // console.warn('[WS] Received non-JSON string:', data)
-                  return
-              }
-              
-              const message: Message = JSON.parse(data)
-              this.emit('message', message)
-            } catch (error) {
-              // console.error('[WS] JSON Parse Error:', error)
-              // 忽略解析错误，不要抛出异常中断程序
+            // ⚡️ 极速通道：判断是否为控制指令
+            // 只要不是特别巨大的 JSON，都视为指令尝试立即解析
+            if (data.length < 10240) { 
+              this.processTextImmediate(data)
+            } else {
+              // 极少见的大文本，放入低优先级队列，避免阻塞 UI
+              this.enqueueMessage(data)
             }
           }
         }
@@ -148,18 +134,77 @@ export class WebSocketClient extends EventEmitter {
       }
     })
   }
-  
+
+  // ========== 文本消息处理逻辑 ==========
+
   /**
-   * 断开连接
+   * 立即处理文本消息 (指令/状态/Ack)
+   * 目标：0 延迟响应 UI
    */
-  disconnect(): void {
-    if (this.config.debug) {
-      console.log('[WS] Disconnecting...')
+  private processTextImmediate(data: string) {
+    try {
+      const trimmed = data.trim()
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return
+      
+      const message: Message = JSON.parse(data)
+      
+      // 直接触发，不进入任何调度，确保 UI 按钮 0 延迟响应
+      this.emit('message', message) 
+      
+    } catch (error) {
+      // JSON 解析失败忽略即可
     }
+  }
+
+  /**
+   * 将大文本加入低优先级队列
+   */
+  private enqueueMessage(data: any) {
+    this.messageQueue.push({ data })
+    this.scheduleQueueProcessing()
+  }
+
+  private scheduleQueueProcessing() {
+    if (this.isProcessingQueue) return
+    this.isProcessingQueue = true
+    requestAnimationFrame(this.processQueueBatch)
+  }
+
+  /**
+   * 批量处理低优先级文本队列
+   */
+  private processQueueBatch = () => {
+    const startTime = performance.now()
     
+    do {
+      const item = this.messageQueue.shift()
+      if (!item) break
+
+      this.processTextImmediate(item.data)
+
+      // 检查时间预算
+      if (performance.now() - startTime > this.FRAME_BUDGET_MS) {
+        if (this.messageQueue.length > 0) {
+            requestAnimationFrame(this.processQueueBatch)
+        } else {
+            this.isProcessingQueue = false
+        }
+        return
+      }
+
+    } while (this.messageQueue.length > 0)
+
+    this.isProcessingQueue = false
+  }
+
+  // ===========================================
+  
+  disconnect(): void {
+    if (this.config.debug) console.log('[WS] Disconnecting...')
     this.isManualClose = true
     this.stopReconnect()
     this.stopHeartbeat()
+    this.messageQueue = [] 
     
     if (this.ws) {
       this.ws.close()
@@ -167,28 +212,17 @@ export class WebSocketClient extends EventEmitter {
     }
   }
   
-  /**
-   * 发送消息
-   */
   send(message: any): boolean {
-    if (!this.isConnected()) {
-      // console.warn('[WS] Not connected, cannot send message')
-      return false
-    }
+    if (!this.isConnected()) return false
     
     try {
-      // ⚡️ [关键修改] 明确支持 ArrayBuffer 和 Uint8Array
+      // WebSocket.send 是异步非阻塞的，立即调用
       if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
         this.ws!.send(message)
       } else {
-        // 文本消息：如果是对象则序列化，否则直接发送
-        const payload = typeof message === 'string' 
-          ? message 
-          : JSON.stringify(message)
-        
+        const payload = typeof message === 'string' ? message : JSON.stringify(message)
         this.ws!.send(payload)
       }
-      
       return true
     } catch (error) {
       console.error('[WS] Failed to send message:', error)
@@ -197,28 +231,17 @@ export class WebSocketClient extends EventEmitter {
     }
   }
   
-  /**
-   * 检查连接状态
-   */
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN
   }
   
-  /**
-   * 获取WebSocket实例
-   */
   getWebSocket(): WebSocket | null {
     return this.ws
   }
   
-  /**
-   * 启动心跳
-   */
   private startHeartbeat(): void {
     if (!this.config.heartbeatInterval) return
-    
     this.stopHeartbeat()
-    
     this.heartbeatTimer = window.setInterval(() => {
       if (this.isConnected()) {
         this.send({ type: 'HEARTBEAT', timestamp: Date.now() })
@@ -226,9 +249,6 @@ export class WebSocketClient extends EventEmitter {
     }, this.config.heartbeatInterval)
   }
   
-  /**
-   * 停止心跳
-   */
   private stopHeartbeat(): void {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer)
@@ -236,19 +256,11 @@ export class WebSocketClient extends EventEmitter {
     }
   }
   
-  /**
-   * 调度重连
-   */
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return
+    if (this.config.debug) console.log('[WS] Reconnecting in', this.config.reconnectInterval, 'ms')
     
-    if (this.config.debug) {
-      console.log('[WS] Reconnecting in', this.config.reconnectInterval, 'ms')
-    }
-    
-    this.emit('reconnecting', { 
-      interval: this.config.reconnectInterval 
-    })
+    this.emit('reconnecting', { interval: this.config.reconnectInterval })
     
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null
@@ -258,9 +270,6 @@ export class WebSocketClient extends EventEmitter {
     }, this.config.reconnectInterval)
   }
   
-  /**
-   * 停止重连
-   */
   private stopReconnect(): void {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
@@ -268,9 +277,6 @@ export class WebSocketClient extends EventEmitter {
     }
   }
   
-  /**
-   * 销毁实例
-   */
   destroy(): void {
     this.disconnect()
     this.removeAllListeners()

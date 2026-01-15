@@ -11,6 +11,9 @@ import { useDataBus } from '@/composables/useDataBus'
 import { useTopicsStore } from './topics'
 import { ElMessage } from 'element-plus'
 
+// 引入 SceneManager
+import { sceneManager } from '@/packages/vis-3d/core/SceneManager'
+
 export const usePlaybackStore = defineStore('playback', () => {
   // ========== 状态 ==========
   
@@ -32,11 +35,14 @@ export const usePlaybackStore = defineStore('playback', () => {
   const speedMultiplier = ref(1.0)
   const availableKeys = ref<string[]>([])
   
-  // 核心依赖：只使用 DataBus
+  // 核心依赖
   const { dataBus, subscribe, sendCommand: sendDataBusCommand, request } = useDataBus()
   
-  // 🌟 [修复] 添加初始化锁，防止重复订阅
+  // 初始化锁
   let isInitialized = false
+  
+  // 乐观更新计时器
+  let optimisticTimer: number | null = null
   
   // ========== 计算属性 ==========
   
@@ -53,10 +59,6 @@ export const usePlaybackStore = defineStore('playback', () => {
   
   // ========== 初始化方法 ==========
   
-  /**
-   * 初始化 DataBus 订阅
-   * 🌟 [修复] 增加防抖检查
-   */
   function initialize() {
     if (isInitialized) {
       console.log('♻️ Playback store already initialized, skipping subscription')
@@ -67,14 +69,12 @@ export const usePlaybackStore = defineStore('playback', () => {
     
     const topics = useTopicsStore()
     
-    // 订阅系统控制消息
     subscribe('INIT_INFO', handleInitInfo)
     subscribe('PLAYBACK_STATUS', handlePlaybackStatus)
     subscribe('COMMAND_ACK', handleCommandAck)
     subscribe('ERROR', handleError)
     subscribe('SUBSCRIPTION_ACK', handleSubscriptionAck)
     
-    // 订阅 Topic 相关消息（转发给 topics store 处理）
     subscribe('TOPIC_SCHEMA', (msg: any) => topics.handleTopicSchema(msg))
     subscribe('TOPIC_DATA', (msg: any) => topics.handleTopicData(msg))
     subscribe('TOPIC_SCHEMA_RESPONSE', (msg: any) => topics.handleTopicSchemaResponse(msg))
@@ -87,17 +87,12 @@ export const usePlaybackStore = defineStore('playback', () => {
   // ========== 消息处理 ==========
   
   function handleInitInfo(msg: any) {
-    // 兼容直接 Payload 或 {data: Payload} 格式
     const data = msg.data || msg
-    
     console.log('📥 Received INIT_INFO')
-    
     serverVersion.value = data.server_version || ''
     availableKeys.value = data.available_keys || []
     
-    // 通知 topics store 初始化列表
     const topics = useTopicsStore()
-    // 兼容 topics store 可能存在的两种初始化方法名
     if (topics.initializeTopics) {
       topics.initializeTopics(data.available_keys || [])
     } else if (topics.initialize) {
@@ -105,30 +100,44 @@ export const usePlaybackStore = defineStore('playback', () => {
     }
     
     if (data.initial_status) {
-      updateStatus(data.initial_status)
+      updateStatus(data.initial_status, true) 
     }
     
     connected.value = true
   }
   
   function handlePlaybackStatus(msg: any) {
-    updateStatus(msg.data || msg)
+    if (optimisticTimer) return
+    const status = msg.data || msg
+    updateStatus(status)
   }
   
-  function updateStatus(data: PlaybackStatus) {
-    isPlaying.value = data.is_playing
+  function updateStatus(data: PlaybackStatus, force = false) {
+    if (force || data.is_playing !== isPlaying.value) {
+        isPlaying.value = data.is_playing
+        sceneManager.setPhysicsActive(data.is_playing)
+        
+        // 🌟 [同步状态]
+        if (data.is_playing) {
+           sceneManager.setPaused(false)
+           // 如果后端推过来 Playing 状态，说明我们应该接收数据
+           dataBus.setDataFlowEnabled(true) 
+        } else {
+           sceneManager.setPaused(true)
+           // 如果后端是 Pause 状态，我们也不应该接收流数据（除非是单步请求的）
+           // 这里可以保守一点：如果是 Pause，就不强制关闸，让 play/pause 按钮去控制
+           // 或者：后端都说 Pause 了，那肯定没数据了，关不关无所谓
+        }
+    }
+
     playMode.value = data.play_mode
     timestampType.value = data.timestamp_type
     
     currentFrameId.value = data.current_frame_id
     currentTimestamp.value = data.current_timestamp
     
-    if (data.frame_range) {
-      frameRange.value = data.frame_range
-    }
-    if (data.time_range) {
-      timeRange.value = data.time_range
-    }
+    if (data.frame_range) frameRange.value = data.frame_range
+    if (data.time_range) timeRange.value = data.time_range
     
     progress.value = data.progress || 0
     speedMultiplier.value = data.speed_multiplier || 1.0
@@ -138,6 +147,10 @@ export const usePlaybackStore = defineStore('playback', () => {
     if (!msg.success) {
       console.error(`Command ${msg.command} failed: ${msg.message}`)
       ElMessage.error(`${msg.command} 失败: ${msg.message}`)
+      if (msg.command === 'PLAY' || msg.command === 'PAUSE') {
+        clearOptimisticTimer()
+        getStatus()
+      }
     }
   }
   
@@ -151,53 +164,119 @@ export const usePlaybackStore = defineStore('playback', () => {
   }
   
   function handleError(msg: any) {
-    // 忽略心跳错误
     if (msg.message && msg.message.includes('HEARTBEAT')) return;
-    
     console.error('📥 Received ERROR:', msg)
     ElMessage.error(`服务器错误: ${msg.message}`)
   }
   
-  // ========== 通用发送方法 ==========
-  
   function sendCommand(type: string, params?: any): boolean {
     if (!dataBus.isConnected()) {
-      // 避免重复弹窗
       if (!wsConnected.value) ElMessage.error('DataBus 未连接')
       return false
     }
     return sendDataBusCommand(type, params)
   }
   
-  // ========== 主动拉取接口 ==========
-  
+  // 🌟 [修正] 添加 function 关键字
   async function requestTopicSchema(topicKey: string): Promise<any> {
     const response = await request('GET_TOPIC_SCHEMA', { topic_key: topicKey })
     return response.schema
   }
   
+  // 🌟 [修正] 添加 function 关键字
   async function requestTopicData(topicKey: string): Promise<any> {
     return await request('GET_TOPIC_DATA', { topic_key: topicKey })
   }
   
-  // ========== 业务控制方法 ==========
+  // ========== 🌟 [核心修改] 业务控制方法 (乐观更新 + 物理阻断) ==========
   
-  function play() { return sendCommand('PLAY') }
-  function pause() { return sendCommand('PAUSE') }
-  function stop() { return sendCommand('STOP') }
-  function reset() { return sendCommand('RESET') }
-  function nextFrame() { return sendCommand('NEXT_FRAME') }
-  function prevFrame() { return sendCommand('PREV_FRAME') }
+  function setOptimisticState(playing: boolean) {
+    isPlaying.value = playing
+    sceneManager.setPhysicsActive(playing)
+    
+    if (optimisticTimer) clearTimeout(optimisticTimer)
+    optimisticTimer = window.setTimeout(() => {
+        optimisticTimer = null
+    }, 2000)
+  }
+
+  function clearOptimisticTimer() {
+    if (optimisticTimer) {
+        clearTimeout(optimisticTimer)
+        optimisticTimer = null
+    }
+  }
+
+  function play() { 
+    // 🟢 1. 允许 3D 渲染
+    sceneManager.setPaused(false)
+    // 🟢 2. 打开数据总闸 (接收 Topic/Image/Scene)
+    dataBus.setDataFlowEnabled(true)
+    
+    setOptimisticState(true)
+    return sendCommand('PLAY') 
+  }
+  
+  function pause() { 
+    // 🔴 1. 3D 急刹车 (清除 pendingFrame)
+    sceneManager.setPaused(true)
+    // 🔴 2. 关闭数据总闸 (丢弃网络层所有新到的业务数据)
+    dataBus.setDataFlowEnabled(false)
+
+    setOptimisticState(false)
+    return sendCommand('PAUSE') 
+  }
+
+  function togglePlay() {
+    if (isPlaying.value) {
+      pause()
+    } else {
+      play()
+    }
+  }
+  
+  function stop() { 
+    sceneManager.setPaused(true)
+    dataBus.setDataFlowEnabled(false)
+    setOptimisticState(false)
+    return sendCommand('STOP') 
+  }
+  
+  function reset() { 
+    sceneManager.setPaused(true)
+    dataBus.setDataFlowEnabled(false)
+    setOptimisticState(false)
+    return sendCommand('RESET') 
+  }
+  
+  // 单步控制：必须临时打开闸门
+  function nextFrame() { 
+    sceneManager.expectNextFrame() // 🎫 3D 放行令牌
+    dataBus.setDataFlowEnabled(true) // 🟢 临时开闸接收这一帧
+    return sendCommand('NEXT_FRAME') 
+  }
+  
+  function prevFrame() { 
+    sceneManager.expectNextFrame() 
+    dataBus.setDataFlowEnabled(true)
+    return sendCommand('PREV_FRAME') 
+  }
   
   function seekToFrame(frameId: number) {
+    sceneManager.expectNextFrame()
+    dataBus.setDataFlowEnabled(true)
     return sendCommand('SEEK_FRAME', { frame_id: frameId })
   }
   
   function seekToTime(timestamp: number) {
+    sceneManager.expectNextFrame()
+    dataBus.setDataFlowEnabled(true)
     return sendCommand('SEEK_TIME', { timestamp })
   }
   
   function seekToProgress(prog: number) {
+    sceneManager.expectNextFrame()
+    dataBus.setDataFlowEnabled(true)
     return sendCommand('SEEK_PROGRESS', { progress: prog })
   }
   
@@ -211,48 +290,31 @@ export const usePlaybackStore = defineStore('playback', () => {
   
   // ========== 订阅方法 ==========
   
-  /**
-   * 订阅 Topic (增强版)
-   * 修复：订阅后立即主动拉取 Schema 和 Data，确保暂停状态下也能立即看到数据
-   */
   async function subscribeTopic(topicKey: string) {
-    // 1. 发送订阅命令
     const sent = sendCommand('SUBSCRIBE_TOPIC', { topic_key: topicKey })
     
     if (sent) {
-      // 2. 立即主动拉取数据（不等待下一个 tick，解决暂停时不更新的问题）
       const topics = useTopicsStore()
-      
       try {
-        // [A] 确保 Schema 存在
         if (!topics.getSchema(topicKey)) {
-          console.log(`🔍 [AutoFetch] Fetching schema for ${topicKey}...`)
           const schema = await requestTopicSchema(topicKey)
           if (schema) {
-            // 手动触发 Store 更新，防止 request 吞掉消息导致 Store 没更新
             topics.handleTopicSchemaResponse({ topic_key: topicKey, schema })
           }
         }
-
-        // [B] 无论是否播放，都拉取一次当前帧数据
-        console.log(`🔍 [AutoFetch] Fetching initial data for ${topicKey}...`)
         const response = await requestTopicData(topicKey)
-        
         if (response && response.data !== null) {
-          // 手动触发 Store 更新
           topics.handleTopicDataResponse({
             topic_key: topicKey,
             frame_id: response.frame_id,
             timestamp: response.timestamp,
             data: response.data
           })
-          console.log(`✅ [AutoFetch] Initial data loaded for ${topicKey}`)
         }
       } catch (error) {
         console.warn('⚠️ [AutoFetch] Failed to fetch initial data:', error)
       }
     }
-    
     return sent
   }
   
@@ -261,7 +323,6 @@ export const usePlaybackStore = defineStore('playback', () => {
   }
   
   return {
-    // 状态
     connected,
     serverVersion,
     isPlaying,
@@ -275,24 +336,17 @@ export const usePlaybackStore = defineStore('playback', () => {
     speedMultiplier,
     availableKeys,
     wsConnected,
-    
-    // 计算属性
     totalFrames,
     duration,
     currentTimeFormatted,
     progressPercent,
-    
-    // 初始化
     initialize,
-    
-    // 核心操作
     sendCommand,
     requestTopicSchema,
     requestTopicData,
-    
-    // 播放控制
     play,
     pause,
+    togglePlay,
     stop,
     reset,
     nextFrame,
@@ -302,9 +356,7 @@ export const usePlaybackStore = defineStore('playback', () => {
     seekToProgress,
     setSpeed,
     getStatus,
-    
-    // 订阅管理
     subscribeTopic,
     getAvailableTopics
-  }
+  } 
 })
